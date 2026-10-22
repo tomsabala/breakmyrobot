@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ral_description</name>
+  <version>0.1.0</version>
+  <description>
+    Robot models and simulated worlds for the Resilient Autonomy Lab. Data only:
+    this package installs SDF, it builds and runs no code. The robot is described
+    once, in SDF, and read directly by robot_state_publisher through
+    sdformat_urdf; there is no parallel URDF/xacro copy to drift out of sync.
+  </description>
+  <maintainer email="noreply@example.com">Resilient Autonomy Lab</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
