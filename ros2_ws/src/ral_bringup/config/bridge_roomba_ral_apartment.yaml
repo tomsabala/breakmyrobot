@@ -4,6 +4,12 @@
 # is the one place where the project's localization-honesty property is
 # enforced. Read the two /tf rules below before changing anything here.
 #
+# The rules are not advisory: test/test_bridge_contract.py parses every
+# bridge_roomba_*.yaml in this package and fails the build if truth reaches /tf,
+# if more than one row claims /tf, or if anything but a truth pose feed claims
+# /ground_truth/*. The teleop check (scripts/checks/) asserts the resulting TF
+# frame set at runtime as the second line of defence.
+#
 # The filename carries the world name because three of the gz topic paths below
 # embed it (/world/ral_apartment/...). A second world gets its own
 # bridge_roomba_<world>.yaml rather than a template or a generator: a static,
