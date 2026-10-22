@@ -143,9 +143,9 @@
 
     <!-- Interior wall A at x = 4.0. Lower segment y in [0, 3.55], upper segment
          y in [4.45, 8.0]: a 0.90 m doorway centred on y = 4.0.
-         The west face of this wall, x = 3.95, is the surface the Phase 1 bumper
-         check drives into; phase1_check.py hardcodes 3.95 - 0.1675 as the
-         expected truth x at contact. Moving this wall invalidates that check. -->
+         The west face of this wall, x = 3.95, is the surface the teleop bumper
+         check drives into; roomba_teleop_check.py hardcodes 3.95 - 0.1675 as
+         the expected truth x at contact. Moving this wall invalidates it. -->
     <model name="wall_a_lower">
       <static>true</static>
       <pose>4.0 1.775 0.3 0 0 0</pose>
