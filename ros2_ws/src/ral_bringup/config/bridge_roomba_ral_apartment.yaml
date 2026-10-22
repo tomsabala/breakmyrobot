@@ -1,0 +1,102 @@
+# ROS <-> Gazebo bridge contract: ral_roomba in the ral_apartment world.
+#
+# This file is the whole interface between the simulated robot and ROS, and it
+# is the one place where the project's localization-honesty property is
+# enforced. Read the two /tf rules below before changing anything here.
+#
+# The filename carries the world name because three of the gz topic paths below
+# embed it (/world/ral_apartment/...). A second world gets its own
+# bridge_roomba_<world>.yaml rather than a template or a generator: a static,
+# greppable artifact is what makes "is truth reaching /tf?" answerable by
+# reading one file. roomba_sim.launch.py's `world` argument selects between them.
+#
+# Message type prefix is gz.msgs.* , never ignition.msgs.* (resolved in Phase 0,
+# docs/gate.md).
+#
+# Phase 4's /world/<world>/create, /remove and /set_pose services are
+# deliberately absent: the bridge's YAML schema has topic entries only
+# (verified), so services must be CLI arguments on a bridge node added then.
+
+# --- Command ------------------------------------------------------------------
+# Operator and (from Phase 2) Nav2 drive the robot through this and nothing else.
+- ros_topic_name: "/cmd_vel"
+  gz_topic_name: "/model/ral_roomba/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ
+
+# --- The robot's own estimate -------------------------------------------------
+# DiffDrive integrates these from the actual rotation of the wheel joints. It is
+# dead reckoning: it drifts, it over-reports when the wheels slip, and it will
+# NOT jump when Phase 4.4 teleports the model. That is exactly why it is the
+# estimate the rest of the stack consumes.
+- ros_topic_name: "/odom"
+  gz_topic_name: "/model/ral_roomba/odometry"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# REQUIRED: this is the only publisher of the odom->base_link transform. Without
+# it nothing completes the TF chain and Phase 2's AMCL and costmaps have a broken
+# tree. DiffDrive emits it as gz.msgs.Pose_V with the unscoped frame names set by
+# its <frame_id>/<child_frame_id>.
+- ros_topic_name: "/tf"
+  gz_topic_name: "/model/ral_roomba/tf"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/joint_states"
+  gz_topic_name: "/world/ral_apartment/model/ral_roomba/joint_state"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS
+
+# --- Sensors ------------------------------------------------------------------
+# Raw, as the sensor produces it. Phase 4's sensor faults will degrade a copy of
+# this stream downstream; this topic stays the unmodified source so the two can
+# be compared.
+- ros_topic_name: "/scan_raw"
+  gz_topic_name: "/scan_raw"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/imu"
+  gz_topic_name: "/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+# A contact sensor ignores its SDF <topic> and always publishes on this generated
+# path (verified: no /bumper topic exists in gz). The world must load
+# gz-sim-contact-system or this topic never appears.
+- ros_topic_name: "/bumper"
+  gz_topic_name: "/world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
+  direction: GZ_TO_ROS
+
+# --- Simulator truth: evaluation only -----------------------------------------
+# PosePublisher's model pose is ground truth. It is bridged to /ground_truth/tf
+# and NEVER to /tf: putting truth in the TF tree would let AMCL, the costmaps and
+# the controller consume a perfect pose, which ENGINEERING.md section 4 forbids
+# and which would make every Phase 3 localization metric meaningless.
+# ral_eval's ground_truth_node converts this to /ground_truth/odom and
+# broadcasts no TF.
+# The same prohibition covers /world/ral_apartment/pose/info and
+# /world/ral_apartment/dynamic_pose/info - do not bridge either into /tf.
+- ros_topic_name: "/ground_truth/tf"
+  gz_topic_name: "/model/ral_roomba/pose"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
+
+# --- Time ---------------------------------------------------------------------
+# Every node in this project runs use_sim_time:=true; this is where sim time
+# enters ROS.
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS

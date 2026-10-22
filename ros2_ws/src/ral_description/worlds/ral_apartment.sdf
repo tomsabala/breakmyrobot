@@ -1,0 +1,267 @@
+<?xml version="1.0" ?>
+<!--
+  ral_apartment - the Phase 1..6 indoor test environment.
+
+  The <world name> and this file's stem MUST stay identical. The launch
+  argument `world` derives three things from that one string: the world SDF
+  path, the bridge config name (bridge_roomba_<world>.yaml), and
+  ground_truth_node's `world_frame` parameter - and the world name is embedded
+  in three of the bridged gz topic paths. A mismatch presents as "the bumper,
+  the joint states and ground truth all silently publish nothing".
+
+  Layout: a 12 m x 8 m floor area, x in [0, 12], y in [0, 8], split into three
+  rooms by two interior walls.
+
+    wall A, x = 4.0, doorway 0.90 m wide centred at y = 4.0
+    wall B, x = 8.0, doorway 0.70 m wide centred at y = 3.0
+
+  The 0.70 m doorway is deliberate and load-bearing for MVP acceptance scenario
+  4: the 0.335 m-wide differential-drive ral_roomba turns in place and passes
+  it; the Ackermann ral_car (Phase 5), with a minimum turning radius, is
+  expected to fail there. That contrast only means something if both robots
+  face the same geometry, so this doorway width must not be widened to make a
+  later demo succeed.
+
+  Furniture is placed clear of the Phase 2 goal region near (10.5, 6.5) so a
+  navigation failure there is a navigation failure, not an unreachable goal.
+
+  Physics is Phase 0 gate row 1 (docs/gate.md): max_step_size 0.002 s, measured
+  RTF 0.999-1.002 with a 360-sample 10 Hz lidar.
+-->
+<sdf version="1.9">
+  <world name="ral_apartment">
+
+    <physics name="default_physics" type="ignored">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- All seven systems are required, and two of them are required for
+         reasons that are invisible until a sensor stream is missing:
+           Contact - without it the bumper contact sensor publishes nothing.
+           Imu     - without it the IMU sensor publishes nothing, not even an
+                     empty topic (verified; there is no /imu at all).
+         UserCommands and ApplyLinkWrench are unused in Phase 1 and present for
+         Phase 4's obstacle spawn/remove, kidnap and external-push faults. -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-contact-system"
+            name="gz::sim::systems::Contact"/>
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-apply-link-wrench-system"
+            name="gz::sim::systems::ApplyLinkWrench"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material><ambient>0.8 0.8 0.8 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Perimeter. Walls are 0.1 m thick and 0.6 m tall: tall enough that the
+         lidar at z = 0.13 above the floor never sees over them, short enough
+         to keep the scene cheap. Inner faces therefore sit 0.05 m inside the
+         boundary lines (e.g. the west wall's inner face is x = 0.05). -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>6.0 0.0 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>12.1 0.1 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>12.1 0.1 0.6</size></box></geometry>
+          <material><ambient>0.4 0.4 0.5 1</ambient><diffuse>0.4 0.4 0.5 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_north">
+      <static>true</static>
+      <pose>6.0 8.0 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>12.1 0.1 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>12.1 0.1 0.6</size></box></geometry>
+          <material><ambient>0.4 0.4 0.5 1</ambient><diffuse>0.4 0.4 0.5 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>0.0 4.0 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 8.0 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8.0 0.6</size></box></geometry>
+          <material><ambient>0.4 0.4 0.5 1</ambient><diffuse>0.4 0.4 0.5 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>12.0 4.0 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 8.0 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8.0 0.6</size></box></geometry>
+          <material><ambient>0.4 0.4 0.5 1</ambient><diffuse>0.4 0.4 0.5 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Interior wall A at x = 4.0. Lower segment y in [0, 3.55], upper segment
+         y in [4.45, 8.0]: a 0.90 m doorway centred on y = 4.0.
+         The west face of this wall, x = 3.95, is the surface the Phase 1 bumper
+         check drives into; phase1_check.py hardcodes 3.95 - 0.1675 as the
+         expected truth x at contact. Moving this wall invalidates that check. -->
+    <model name="wall_a_lower">
+      <static>true</static>
+      <pose>4.0 1.775 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 3.55 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 3.55 0.6</size></box></geometry>
+          <material><ambient>0.45 0.42 0.4 1</ambient><diffuse>0.45 0.42 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_a_upper">
+      <static>true</static>
+      <pose>4.0 6.225 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 3.55 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 3.55 0.6</size></box></geometry>
+          <material><ambient>0.45 0.42 0.4 1</ambient><diffuse>0.45 0.42 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Interior wall B at x = 8.0. Lower segment y in [0, 2.65], upper segment
+         y in [3.35, 8.0]: a 0.70 m doorway centred on y = 3.0 - the gap the
+         Ackermann ral_car is expected to fail at and the Roomba is not. -->
+    <model name="wall_b_lower">
+      <static>true</static>
+      <pose>8.0 1.325 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 2.65 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 2.65 0.6</size></box></geometry>
+          <material><ambient>0.45 0.42 0.4 1</ambient><diffuse>0.45 0.42 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_b_upper">
+      <static>true</static>
+      <pose>8.0 5.675 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 4.65 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 4.65 0.6</size></box></geometry>
+          <material><ambient>0.45 0.42 0.4 1</ambient><diffuse>0.45 0.42 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Furniture: static obstacles the lidar sees and the planner must route
+         around. All three are clear of the Phase 2 goal region near
+         (10.5, 6.5). -->
+    <model name="furniture_a">
+      <static>true</static>
+      <pose>2.0 5.5 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.8 0.6 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.8 0.6 0.6</size></box></geometry>
+          <material><ambient>0.55 0.35 0.2 1</ambient><diffuse>0.6 0.4 0.25 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="furniture_b">
+      <static>true</static>
+      <pose>6.0 1.5 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.6 0.6 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.6 0.6 0.6</size></box></geometry>
+          <material><ambient>0.55 0.35 0.2 1</ambient><diffuse>0.6 0.4 0.25 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="furniture_c">
+      <static>true</static>
+      <pose>9.5 2.0 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.0 0.5 0.6</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.0 0.5 0.6</size></box></geometry>
+          <material><ambient>0.55 0.35 0.2 1</ambient><diffuse>0.6 0.4 0.25 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Spawn. z = 0.05 puts the chassis centre 0.05 m above the floor, which
+         is what the wheel (-0.014) and caster (-0.035) z offsets in
+         models/ral_roomba/model.sdf assume; the two numbers are coupled.
+         The model-level pose lives here because sdformat_urdf refuses a <pose>
+         inside <model> and robot_state_publisher dies on it.
+         Resolving model:// requires GZ_SIM_RESOURCE_PATH to contain the
+         installed share/ral_description/models directory - roomba_sim.launch.py
+         sets it. -->
+    <include>
+      <uri>model://ral_roomba</uri>
+      <pose>0.5 0.5 0.05 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

@@ -17,3 +17,6 @@ __pycache__/
 /.cache/
 /.config/
 /.local/
+# Local proof scripts: evidence lives in docs/, the harness that produced it
+# is scratch and stays untracked.
+/scripts/_validations/
