@@ -1,4 +1,19 @@
-"""Bring up ral_roomba in a simulated world: gz, bridge, TF, truth republisher.
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Bring up ral_roomba in a simulated world: gz, bridge, TF, truth republisher.
 
 One launch argument, `world`, selects three things that must stay consistent or
 sensor streams silently vanish:
@@ -32,19 +47,33 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-# The robot does not depend on the `world` argument, so its SDF is read here
-# with plain Python. sdformat_urdf parses this SDF in place: there is no URDF or
+# The robot does not depend on the `world` argument, so its SDF is read with
+# plain Python. sdformat_urdf parses this SDF in place: there is no URDF or
 # xacro copy of the robot anywhere in this project, so there is nothing to drift
 # out of sync with what the simulator actually spawns.
-_DESCRIPTION_SHARE = get_package_share_directory('ral_description')
-_MODEL_SDF = os.path.join(_DESCRIPTION_SHARE, 'models', 'ral_roomba', 'model.sdf')
+#
+# Read inside generate_launch_description(), not at import: at import, a missing
+# or uninstalled ral_description fails while the launch file is being *parsed*,
+# which surfaces as a bare FileNotFoundError with no indication of what the
+# launch system was doing.
 
-with open(_MODEL_SDF, 'r') as handle:
-    ROBOT_DESCRIPTION = handle.read()
+
+def _robot_description() -> str:
+    share = get_package_share_directory('ral_description')
+    model_sdf = os.path.join(share, 'models', 'ral_roomba', 'model.sdf')
+    try:
+        with open(model_sdf, 'r') as handle:
+            return handle.read()
+    except OSError as exc:
+        raise RuntimeError(
+            f'cannot read the robot description at {model_sdf}: {exc}. '
+            'Build and source the workspace (scripts/build.sh) so ral_description '
+            'is installed.') from exc
 
 
 def generate_launch_description() -> LaunchDescription:
     world = LaunchConfiguration('world')
+    robot_description = _robot_description()
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -59,7 +88,7 @@ def generate_launch_description() -> LaunchDescription:
         # own resource path still works.
         SetEnvironmentVariable(
             'GZ_SIM_RESOURCE_PATH',
-            os.path.join(_DESCRIPTION_SHARE, 'models')
+            os.path.join(get_package_share_directory('ral_description'), 'models')
             + ':' + os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
         ),
 
@@ -91,14 +120,17 @@ def generate_launch_description() -> LaunchDescription:
             output='screen',
         ),
 
-        # Publishes base_link -> rplidar_link / wheels / casters. The moving part
-        # of the chain, odom -> base_link, comes from DiffDrive over the bridge.
+        # Publishes the fixed joints (base_link -> rplidar_link and the two
+        # casters) on /tf_static, and the two revolute wheel joints on /tf from
+        # the bridged /joint_states - so a broken joint_state bridge row removes
+        # the wheel frames while the static ones stay. The moving part of the
+        # chain, odom -> base_link, comes from DiffDrive over the bridge.
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
             name='robot_state_publisher',
             parameters=[{
-                'robot_description': ROBOT_DESCRIPTION,
+                'robot_description': robot_description,
                 'use_sim_time': True,
             }],
             output='screen',
