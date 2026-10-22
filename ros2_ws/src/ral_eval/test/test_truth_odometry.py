@@ -1,4 +1,19 @@
-"""Unit tests for ral_eval.ground_truth_node.truth_odometry.
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Unit tests for ral_eval.ground_truth_node.truth_odometry.
 
 Plain pytest: TFMessage objects are constructed directly, no ROS graph, no
 node. A failure here means the truth stream is wrong regardless of how healthy
@@ -15,6 +30,7 @@ from tf2_msgs.msg import TFMessage
 from ral_eval.ground_truth_node import (
     TRUTH_CHILD_FRAME,
     TRUTH_FRAME,
+    TWIST_UNKNOWN,
     truth_odometry,
 )
 
@@ -71,14 +87,27 @@ def test_output_frames_and_stamp():
     assert odom.header.stamp.nanosec == 250000000
 
 
-def test_first_sample_has_zero_twist():
+def test_first_sample_marks_the_twist_unknown_instead_of_zero():
+    """No difference is available yet; 0.0 would assert a measured standstill."""
     msg = _message(_stamped(WORLD, MODEL, x=0.5, t=1.0))
 
     odom, prev = truth_odometry(msg, WORLD, MODEL, None)
 
-    assert odom.twist.twist.linear.x == 0.0
-    assert odom.twist.twist.angular.z == 0.0
+    assert odom.twist.covariance[0] == TWIST_UNKNOWN
+    assert odom.pose.pose.position.x == pytest.approx(0.5)
     assert prev == pytest.approx((0.5, 0.0, 0.0, 1.0))
+
+
+def test_duplicate_stamp_marks_the_twist_unknown():
+    """Two poses sharing a stamp: dt = 0, so the velocity is not computable."""
+    first = _message(_stamped(WORLD, MODEL, x=0.0, t=1.0))
+    _, prev = truth_odometry(first, WORLD, MODEL, None)
+
+    second = _message(_stamped(WORLD, MODEL, x=0.5, t=1.0))
+    odom, _ = truth_odometry(second, WORLD, MODEL, prev)
+
+    assert odom.twist.covariance[0] == TWIST_UNKNOWN
+    assert odom.twist.twist.linear.x == 0.0
 
 
 def test_twist_is_finite_difference_of_consecutive_truth_poses():
@@ -113,11 +142,61 @@ def test_yaw_wrap_does_not_produce_a_spurious_spin():
     assert odom.twist.twist.angular.z == pytest.approx(0.832, abs=1e-3)
 
 
-def test_covariances_are_zero():
+def test_valid_twist_is_not_marked_unknown():
+    first = _message(_stamped(WORLD, MODEL, x=0.0, t=1.0))
+    _, prev = truth_odometry(first, WORLD, MODEL, None)
+
+    second = _message(_stamped(WORLD, MODEL, x=0.02, t=1.1))
+    odom, _ = truth_odometry(second, WORLD, MODEL, prev)
+
+    assert odom.twist.covariance[0] == 0.0
+
+
+def test_skid_is_not_counted_as_forward_speed():
+    """
+    A 45-degree skid is 1.0 m/s forward + 1.0 m/s sideways, not 1.414 forward.
+
+    Signing the displacement magnitude would report 1.414 and hide half of an
+    actuation fault from the Phase 4.3 commanded-vs-achieved comparison.
+    """
+    first = _message(_stamped(WORLD, MODEL, x=0.0, y=0.0, yaw=0.0, t=1.0))
+    _, prev = truth_odometry(first, WORLD, MODEL, None)
+
+    second = _message(_stamped(WORLD, MODEL, x=0.1, y=0.1, yaw=0.0, t=1.1))
+    odom, _ = truth_odometry(second, WORLD, MODEL, prev)
+
+    assert odom.twist.twist.linear.x == pytest.approx(1.0, abs=1e-3)
+    assert odom.twist.twist.linear.y == pytest.approx(1.0, abs=1e-3)
+
+
+def test_sideways_motion_reports_lateral_not_forward():
+    """A diff-drive robot cannot do this; non-zero linear.y is the evidence."""
+    first = _message(_stamped(WORLD, MODEL, x=0.0, y=0.0, yaw=0.0, t=1.0))
+    _, prev = truth_odometry(first, WORLD, MODEL, None)
+
+    second = _message(_stamped(WORLD, MODEL, x=0.0, y=0.05, yaw=0.0, t=1.1))
+    odom, _ = truth_odometry(second, WORLD, MODEL, prev)
+
+    assert odom.twist.twist.linear.x == pytest.approx(0.0, abs=1e-6)
+    assert odom.twist.twist.linear.y == pytest.approx(0.5, abs=1e-3)
+
+
+def test_forward_component_is_measured_along_the_previous_heading():
+    """Heading +90 deg: a +y displacement is forward, a +x displacement is lateral."""
+    first = _message(_stamped(WORLD, MODEL, x=0.0, y=0.0, yaw=math.pi / 2.0, t=1.0))
+    _, prev = truth_odometry(first, WORLD, MODEL, None)
+
+    second = _message(_stamped(WORLD, MODEL, x=0.0, y=0.03, yaw=math.pi / 2.0, t=1.1))
+    odom, _ = truth_odometry(second, WORLD, MODEL, prev)
+
+    assert odom.twist.twist.linear.x == pytest.approx(0.3, abs=1e-3)
+    assert odom.twist.twist.linear.y == pytest.approx(0.0, abs=1e-6)
+
+
+def test_pose_covariance_is_zero():
     """Ground truth carries no uncertainty; zeros must not be read as confidence."""
     msg = _message(_stamped(WORLD, MODEL, x=0.5))
 
     odom, _ = truth_odometry(msg, WORLD, MODEL, None)
 
     assert list(odom.pose.covariance) == [0.0] * 36
-    assert list(odom.twist.covariance) == [0.0] * 36

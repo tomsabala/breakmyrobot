@@ -1,4 +1,19 @@
-"""Republish simulator ground truth as an evaluation-only Odometry stream.
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Republish simulator ground truth as an evaluation-only Odometry stream.
 
 This topic exists for **evaluation and display only**. It is simulator ground
 truth: it is never an input to localization, planning or control, and this node
@@ -10,6 +25,20 @@ receiving it through the TF tree.
 Source: the gz PosePublisher on ral_roomba, bridged to /ground_truth/tf as a
 tf2_msgs/msg/TFMessage (gz.msgs.Pose_V). The gz world name arrives as
 header.frame_id and the model name as child_frame_id.
+
+The pose is copied; the twist is DERIVED here by finite difference, because the
+simulator reports no velocity on this path. Two consequences worth knowing
+before reading the numbers:
+
+* When no valid difference exists (first sample after start-up, or two poses
+  sharing a stamp) the twist is marked unknown with twist.covariance[0] = -1
+  rather than published as a zero that would read as "measured at rest".
+* A pose discontinuity is differentiated like any other motion. When Phase 4.4
+  teleports the model, this stream will report the resulting physically
+  impossible velocity for one sample. That is the honest derivative of truth
+  and it is deliberately not clamped or gated here: a threshold would be a
+  tuning constant invented ahead of the experiment that needs it. Phase 4.4
+  decides then whether it wants an explicit jump flag.
 """
 
 import math
@@ -17,6 +46,7 @@ import math
 from geometry_msgs.msg import Quaternion
 from nav_msgs.msg import Odometry
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from tf2_msgs.msg import TFMessage
 
@@ -29,6 +59,10 @@ from tf2_msgs.msg import TFMessage
 #       estimated `base_link`.
 TRUTH_FRAME = 'world'
 TRUTH_CHILD_FRAME = 'base_link_truth'
+
+# twist.covariance[0] = -1 is the ROS convention for "this field is invalid".
+# Used when no finite difference is available; see truth_odometry.
+TWIST_UNKNOWN = -1.0
 
 
 def _yaw_from_quaternion(q: Quaternion) -> float:
@@ -45,13 +79,18 @@ def _wrap_to_pi(angle: float) -> float:
 def truth_odometry(msg: TFMessage, world_frame: str, model_frame: str,
                    prev: 'tuple[float, float, float, float] | None'
                    ) -> 'tuple[Odometry, tuple[float, float, float, float]] | None':
-    """Convert one ground-truth TFMessage into an Odometry sample.
+    """
+    Convert one ground-truth TFMessage into an Odometry sample.
 
     `prev` is (x, y, yaw, t_sec) from the previously accepted message, or None
     for the first one. Returns (odometry, new_prev), or None when the message
     carries no transform matching world_frame -> model_frame. A TFMessage may
     carry several transforms, so the match is by name; taking transforms[0]
     would publish whatever happened to be first.
+
+    The returned twist is a finite difference against `prev`; when that is not
+    available it is marked unknown (twist.covariance[0] = TWIST_UNKNOWN) rather
+    than published as zero.
 
     Kept free of node state so it is directly testable without a ROS graph.
     """
@@ -87,21 +126,31 @@ def truth_odometry(msg: TFMessage, world_frame: str, model_frame: str,
     # the only honest way to produce one - and it is differentiated truth, not a
     # simulator-reported measurement. Phase 4.3 compares commanded /cmd_vel
     # against this achieved velocity, so it must exist and must not be invented.
-    if prev is not None:
-        prev_x, prev_y, prev_yaw, prev_t = prev
-        dt = t_sec - prev_t
-        if dt > 0.0:
-            dx = x - prev_x
-            dy = y - prev_y
-            # Signed body-frame speed: project the displacement on the previous
-            # heading so reversing reads negative instead of positive.
-            projection = math.cos(prev_yaw) * dx + math.sin(prev_yaw) * dy
-            speed = math.hypot(dx, dy) / dt
-            odom.twist.twist.linear.x = math.copysign(speed, projection) if projection != 0.0 else 0.0
-            odom.twist.twist.angular.z = _wrap_to_pi(yaw - prev_yaw) / dt
+    dt = (t_sec - prev[3]) if prev is not None else 0.0
+    if dt > 0.0:
+        prev_x, prev_y, prev_yaw, _ = prev
+        dx = x - prev_x
+        dy = y - prev_y
+        # Body-frame DECOMPOSITION on the previous heading, not the magnitude of
+        # the displacement: linear.x is the forward component alone. Signing a
+        # magnitude would report a 45-degree skid at 1.0 m/s forward + 1.0 m/s
+        # sideways as 1.414 m/s forward, which hides exactly the kind of
+        # actuation fault Phase 4.3 compares against the commanded /cmd_vel.
+        # A differential-drive robot cannot translate sideways, so a non-zero
+        # linear.y is evidence that the wheels slipped or the body was pushed.
+        odom.twist.twist.linear.x = (math.cos(prev_yaw) * dx + math.sin(prev_yaw) * dy) / dt
+        odom.twist.twist.linear.y = (-math.sin(prev_yaw) * dx + math.cos(prev_yaw) * dy) / dt
+        odom.twist.twist.angular.z = _wrap_to_pi(yaw - prev_yaw) / dt
+    else:
+        # No valid difference: either the first sample after start-up, or two
+        # poses sharing a stamp. The velocity is UNKNOWN, not zero. Publishing
+        # an unmarked 0.0 would assert "the robot is at rest", a measurement
+        # this node did not make (ENGINEERING.md section 8). The pose in this
+        # message is valid and is still published.
+        odom.twist.covariance[0] = TWIST_UNKNOWN
 
-    # Covariances stay all-zero. Ground truth carries no uncertainty, so there is
-    # no covariance to report; these zeros must never be rendered as a
+    # Pose covariance stays all-zero. Ground truth carries no uncertainty, so
+    # there is no covariance to report; these zeros must never be rendered as a
     # confidence figure (ENGINEERING.md section 4) - a zero-covariance display
     # would read as "perfectly certain estimate", which is a different claim.
 
@@ -144,12 +193,20 @@ def main(args=None) -> None:
     node = GroundTruthNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # `ros2 launch` SIGINTs the whole process group; rclpy surfaces that as
+        # either of these, depending on where the signal lands.
         pass
     finally:
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        # The signal can also arrive during teardown. Letting it escape made
+        # this the only node in the stack that reported `process has died,
+        # exit code -2` on every clean shutdown, which destroys the value of
+        # that message as a failure signal.
+        try:
+            node.destroy_node()
+        except KeyboardInterrupt:
+            pass
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':
