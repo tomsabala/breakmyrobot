@@ -42,7 +42,10 @@
            Imu     - without it the IMU sensor publishes nothing, not even an
                      empty topic (verified; there is no /imu at all).
          UserCommands and ApplyLinkWrench are unused in Phase 1 and present for
-         Phase 4's obstacle spawn/remove, kidnap and external-push faults. -->
+         Phase 4's obstacle spawn/remove, kidnap and external-push faults.
+         UserCommands is what serves /world/ral_apartment/create, /remove and
+         /set_pose - the services config/bridge_roomba_ral_apartment.yaml says
+         Phase 4 will bridge - so removing it would make that contract false. -->
     <plugin filename="gz-sim-physics-system"
             name="gz::sim::systems::Physics"/>
     <plugin filename="gz-sim-sensors-system"

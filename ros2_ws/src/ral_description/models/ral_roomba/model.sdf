@@ -260,11 +260,25 @@
       </axis>
     </joint>
 
-    <!-- These velocity and acceleration limits are the PLANT's limits - the real
-         Create 3's drive capability - not a tuning preference. Phase 2's Nav2
-         controller and velocity smoother must be configured at or below them;
-         commanding beyond them produces a command the robot cannot execute and
-         an estimate-vs-achieved gap that looks like a fault and is not one.
+    <!-- Plant limits, with their provenance, because Phase 2's Nav2 controller
+         and velocity smoother inherit them as hard ceilings:
+           max_linear_velocity 0.46 m/s, max_angular_velocity 1.9 rad/s -
+             iRobot Create 3 specification. These are the ROBOT's limits, not a
+             tuning preference; commanding beyond them produces a command the
+             robot cannot execute and an estimate-vs-achieved gap that looks
+             like a fault and is not one.
+           +/-1.0 m/s^2 and +/-2.5 rad/s^2 - CHOSEN plant assumptions, not
+             datasheet figures: the Create 3 specification publishes no
+             acceleration limit. They are here so the robot ramps instead of
+             stepping instantaneously to a commanded velocity, and the teleop
+             check's +/-0.15 rad/s tolerance on the measured peak yaw rate
+             exists because of this ramp. Replace them with measured values if
+             real-platform data ever becomes available.
+         DiffDrive has NO command timeout: the last /cmd_vel is applied until a
+         new one arrives. A Phase 4 communication fault therefore produces a
+         robot that keeps driving on its last command, not one that stops - a
+         modelled behavior with no watchdog behind it. Introducing one means
+         adding a safety supervisor and describing it as such.
          DiffDrive also integrates wheel-joint rotation into /tf and /odom: that
          is genuine dead reckoning, it drifts, and it is the robot's own estimate
          - never simulator truth. -->
