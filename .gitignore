@@ -1,1 +1,19 @@
 /RESILIENT_AUTONOMY_LAB_MVP_PLAN.md
+
+# Run artifacts (bags, metrics, plots)
+/runs/
+
+# colcon
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+__pycache__/
+
+# scripts/dev.sh sets HOME=/ws, so container tooling drops caches in the repo
+/.gz/
+/.ignition/
+/.sdformat/
+/.ros/
+/.cache/
+/.config/
+/.local/
