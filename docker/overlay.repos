@@ -1,0 +1,22 @@
+# Every repository built from source into the image's /opt/gz_ws overlay.
+#
+# Generic by design: Phase 0 needs only the Gazebo<->ROS 2 bridge, Phase 5 adds
+# the ArduPilot stack, so this file is named for its role (the source overlay)
+# rather than for any one of its entries.
+#
+# ros_gz must be built from source: the apt package ros-humble-ros-gz is
+# compiled against Gazebo Fortress, and this project needs Harmonic because
+# ardupilot_gazebo (Phase 5, the car) supports Garden/Harmonic/Ionic/Jetty only.
+# sdformat_urdf converts the SDF robot models into URDF for robot_state_publisher.
+#
+# Upstream repository names are kept verbatim — they are fetch URLs and colcon
+# package names, not labels.
+repositories:
+  ros_gz:
+    type: git
+    url: https://github.com/gazebosim/ros_gz.git
+    version: humble
+  sdformat_urdf:
+    type: git
+    url: https://github.com/ros/sdformat_urdf.git
+    version: humble

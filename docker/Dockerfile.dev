@@ -1,0 +1,13 @@
+# Final layer: entrypoint on top of the committed ros_gz overlay (ral:overlay).
+#
+# Split from the main Dockerfile so that editing entrypoint.sh does not
+# invalidate the overlay, whose compile is deliberately a capped `docker run`
+# (see docker/build_overlay.sh) and takes ~7 minutes serialized.
+ARG OVERLAY_IMAGE=ral:overlay
+FROM ${OVERLAY_IMAGE}
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]
