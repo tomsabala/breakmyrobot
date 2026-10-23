@@ -78,11 +78,16 @@ COVARIANCE_LIMIT = 0.25     # trace below which AMCL is converged; == the runner
 # the run's own pre-activation window AND bounded to a horizon.
 #
 # RESPONSE_HORIZON_S is how long after an activation a change can still be
-# attributed to the fault: 3.0 s sim is three replan opportunities at the BT's
-# 1 Hz RateController. RESPONSE_BASELINE_WINDOW_S is the pre-activation window
-# the threshold is calibrated on, and RESPONSE_BASELINE_MARGIN the multiple of
-# the largest excursion found there that a post-activation change must exceed.
-RESPONSE_HORIZON_S = 3.0
+# attributed to the fault: 2.0 s sim is two replan opportunities at the BT's
+# 1 Hz RateController. It was 3.0 s until a sweep over the regenerated
+# fault-free bags fired cmd_changed on 6 of 38 instants in one baseline, above
+# the 4-in-31 rate the setting was chosen against. The horizon is the term
+# that dominates, so it is the one that was lowered: widening
+# RESPONSE_BASELINE_MARGIN instead would hide a genuine slow-down fault.
+# RESPONSE_BASELINE_WINDOW_S is the pre-activation window the threshold is
+# calibrated on, and RESPONSE_BASELINE_MARGIN the multiple of the largest
+# excursion found there that a post-activation change must exceed.
+RESPONSE_HORIZON_S = 2.0
 RESPONSE_BASELINE_WINDOW_S = 10.0
 RESPONSE_BASELINE_MARGIN = 1.5
 CMD_CHANGE_FLOOR = 0.05      # m/s, the floor the derived threshold cannot go below
@@ -1106,9 +1111,10 @@ def write_metrics(run_dir: str) -> dict:
         'recorded. Both material-change triggers are calibrated against this run\'s own '
         f'pre-activation window ({RESPONSE_BASELINE_WINDOW_S:.0f} s sim) and bounded to '
         f'{RESPONSE_HORIZON_S:.0f} s sim after activation. At these settings, synthetic '
-        'activation times swept across fault-free runs still fired cmd_changed on 2 of 31 '
-        'and 5 of 63 instants and plan_diverged on 0 of 31 and 3 of 63: a single reported '
-        'response is weak evidence on its own and must be read beside a control run')
+        'activation times swept at 1 s intervals across four fault-free missions still '
+        'fired cmd_changed on 3 of 38, 5 of 38, 3 of 39 and 3 of 38 instants, and '
+        'plan_diverged on none of them: a single reported response is weak evidence on '
+        'its own and must be read beside a control run')
     activations = [(ral_stamp(msg), msg) for _, msg in fault_msgs
                    if msg.state == FaultEvent.STATE_ACTIVATED]
     if not activations:
