@@ -1,0 +1,24 @@
+# world -> map alignment for the `apartment` map. Measured, never assumed.
+#
+# world_to_map is the pose of the `map` frame ORIGIN expressed in the gz
+# `world` frame. slam_toolbox defines `map` at the robot's pose when mapping
+# starts, so this is the robot's true pose at that instant, sampled from
+# /ground_truth/odom at slam_toolbox's first /map publication with the robot
+# verified stationary.
+#
+# This file belongs to one specific apartment.pgm. Regenerating the map MUST
+# regenerate this file: a stale pair biases every estimate-error metric.
+# Procedure: ros2 launch ral_bringup map_build.launch.py
+world_to_map:
+  x: 0.5
+  y: 0.5
+  yaw: 0.0
+map: apartment
+world: ral_apartment
+captured_utc: '2026-10-22T15:32:41Z'
+git_sha: a4c435427a6b35127be8951a21759b05143e2a7c
+source: /ground_truth/odom at slam_toolbox's first /map publication
+map_resolution_m: 0.05
+stationary_max_xy_m: 0.0
+stationary_max_yaw_rad: 0.0
+map_sha256: '47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b'

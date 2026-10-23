@@ -16,12 +16,22 @@
 
   <exec_depend>ral_description</exec_depend>
   <exec_depend>ral_eval</exec_depend>
+  <exec_depend>ral_faults</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>sdformat_urdf</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+
+  <!-- Phase 2: the static map, AMCL and Nav2 closed loop. nav2_map_server is
+       both a runtime node (map_server) and the map_saver_cli used to produce
+       the committed map; teleop_twist_keyboard drives the mapping session. -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
 
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_lint_auto</test_depend>

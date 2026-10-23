@@ -31,6 +31,24 @@ args=(
   -e "ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}"
 )
 
+# A git worktree's .git is a FILE holding an absolute path into the main
+# repository's .git directory, which lies outside $REPO_ROOT and is therefore
+# not covered by the mount above. Without this, every container-side `git`
+# call fails with "not a git repository", so the provenance fields that record
+# which commit produced an artifact (capture_world_to_map's git_sha, the proof
+# harness's run table) silently degrade to "unknown" - evidence that cannot be
+# traced to a commit. Mounting the shared gitdir at its own host path is what
+# makes the pointer inside .git resolve in the container. No-op for a plain
+# clone, where .git is a directory already under /ws. Read-only: the only
+# container-side use is `git rev-parse`, and the main repository's object
+# store is not something a sandboxed build should be able to write.
+if [ -f "$REPO_ROOT/.git" ]; then
+  GIT_COMMON_DIR="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$GIT_COMMON_DIR" ] && [ -d "$GIT_COMMON_DIR" ]; then
+    args+=(-v "$GIT_COMMON_DIR":"$GIT_COMMON_DIR":ro)
+  fi
+fi
+
 if [ -t 0 ] && [ -t 1 ]; then
   args+=(-it)
 fi

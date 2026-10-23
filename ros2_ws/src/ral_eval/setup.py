@@ -35,6 +35,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ground_truth_node = ral_eval.ground_truth_node:main',
+            'capture_world_to_map = ral_eval.capture_world_to_map:main',
         ],
     },
 )

@@ -1,0 +1,119 @@
+# slam_toolbox parameters for ral_roomba in ral_apartment.
+#
+# Copied verbatim from
+#   /opt/ros/humble/share/slam_toolbox/config/mapper_params_online_async.yaml
+# (Humble), with the overrides marked RAL below and nothing else changed. Every
+# override carries the reason it exists; an unexplained divergence from the
+# upstream defaults is a future debugging trap.
+#
+# Used only by ral_bringup/launch/map_build.launch.py, which starts
+# async_slam_toolbox_node directly with THIS file rather than including
+# slam_toolbox's own online_async_launch.py. That is deliberate: the shipped
+# launch file defaults to the shipped params, and two of those defaults
+# (base_frame, max_laser_range) are wrong for this robot in ways that fail
+# quietly rather than loudly.
+
+slam_toolbox:
+  ros__parameters:
+
+    # Plugin params
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ROS Parameters
+    odom_frame: odom
+    map_frame: map
+    # RAL: upstream default is `base_footprint`. This robot has no such link
+    # (models/ral_roomba/model.sdf has base_link as its root), so the shipped
+    # value makes every TF lookup fail and no map is ever produced.
+    base_frame: base_link
+    # RAL: scan_fault_relay's output - the same stream AMCL will match against
+    # later, and the stream Phase 4.2 degrades. Mapping off /scan_raw would
+    # build the map from a signal the robot's stack never sees.
+    scan_topic: /scan
+    use_map_saver: true
+    mode: mapping #localization
+
+    # if you'd like to immediately start continuing a map at a given pose
+    # or at the dock, but they are mutually exclusive, if pose is given
+    # will use pose
+    #map_file_name: test_steve
+    # map_start_pose: [0.0, 0.0, 0.0]
+    #map_start_at_dock: true
+
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02 #if 0 never publishes odometry
+    # RAL: 5.0 upstream. Bounded visual feedback while driving the mapping run
+    # by hand, and it bounds how long capture_world_to_map waits for the first
+    # /map before it can sample truth.
+    map_update_interval: 2.0
+    resolution: 0.05
+    # RAL: 0.0 / 20.0 upstream. The modelled RPLIDAR A1 reports [0.15, 12.0]
+    # (model.sdf <range>); rastering out to 20 m invents occupancy from beams
+    # the sensor cannot produce.
+    min_laser_range: 0.15
+    max_laser_range: 12.0
+    minimum_time_interval: 0.5
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.
+    stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
+    enable_interactive_mode: true
+
+    # General Parameters
+    use_scan_matching: true
+    use_scan_barycenter: true
+    # RAL: 0.5 / 0.5 upstream. The apartment is 12 x 8 m with 0.70 m and 0.90 m
+    # doorways; at 0.5 m a doorway can be traversed between two scan
+    # registrations, so the gap is reconstructed from interpolation instead of
+    # from measurements.
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    # RAL: 10 / 0.35 / 0.45 upstream. MEASURED FAILURE: with the upstream
+    # values this apartment produced a map containing a ghost copy of room 1
+    # shifted by -7.95 m in x, with wall A and the east wall missing. The
+    # world is three near-identical 4 m rooms in a row, so a scan taken in
+    # one room matches the next one almost as well as its own - textbook
+    # perceptual aliasing. Requiring a longer chain and a much stronger
+    # response makes a one- or two-room-over match fail to qualify.
+    loop_match_minimum_chain_size: 15
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.55
+    loop_match_minimum_response_fine: 0.65
+
+    # Correlation Parameters - Correlation Parameters
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # Correlation Parameters - Loop Closure Parameters
+    # RAL: 8.0 upstream, i.e. a +/-4 m search window - exactly the room
+    # pitch of this world, so the matcher is free to lock onto the next room
+    # along. 3.0 (+/-1.5 m) is narrower than the 4 m period, which makes the
+    # aliased alignment unreachable rather than merely unlikely.
+    loop_search_space_dimension: 3.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # Scan Matcher Parameters
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
+    min_pass_through: 2
+    occupancy_threshold: 0.1
