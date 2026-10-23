@@ -4,10 +4,13 @@
   <name>ral_eval</name>
   <version>0.1.0</version>
   <description>
-    Evaluation-side nodes: they observe the robot, they never drive it. Phase 1
-    contains one, ground_truth_node, which republishes simulator ground truth on
-    an evaluation-only topic and deliberately broadcasts no TF, so no localization
+    Evaluation-side nodes and helpers: they observe the robot, they never drive
+    it. ground_truth_node republishes simulator ground truth on an
+    evaluation-only topic and deliberately broadcasts no TF, so no localization
     or navigation component can consume truth by accident.
+    capture_world_to_map measures the gz world -> SLAM map alignment once per
+    map, and frames.py is the single implementation of that conversion, shared
+    by the nav launch file and the Phase 3 metrics.
   </description>
   <maintainer email="noreply@example.com">Resilient Autonomy Lab</maintainer>
   <license>Apache-2.0</license>
@@ -16,6 +19,7 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
