@@ -1,0 +1,45 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The baseline mission plus one intervention, so the runner's dispatch path is
+# exercised by a real scenario rather than only by a unit test.
+#
+# IN PHASE 3 THIS FAULT DOES NOT HAPPEN. /faults/spawn_obstacle is served by
+# ral_faults/fault_manager.py, which arrives in Phase 4.1. Until then the
+# runner finds no service, publishes one FaultEvent with state `rejected`,
+# records `not_applied` in run.json and lets the mission continue - and
+# plot.png draws the obstacle outline DASHED, because it never existed. Phase
+# 4 needs no change here or in the runner: the same file becomes a real fault
+# run when the service appears.
+#
+# Poses are in the gz WORLD frame. An obstacle pose stays in `world`: gz
+# entity poses are defined there, and converting one through world_to_map
+# would place the box somewhere else entirely.
+
+experiment_id: obstacle_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 10.5, y: 6.5, yaw: 1.57}
+timeout_sec: 180
+interventions:
+  # 20 s sim after goal acceptance, by which point the robot is in room 1/2
+  # and the box lands ahead of it rather than on top of it.
+  - at_sec: 20.0
+    type: spawn_obstacle
+    params:
+      name: blocker_1
+      pose: {x: 6.0, y: 3.0, yaw: 0.0}
+      size: {x: 1.2, y: 0.2, z: 0.6}

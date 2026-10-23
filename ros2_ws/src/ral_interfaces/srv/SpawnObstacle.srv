@@ -1,0 +1,36 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Put a real box into the running world, so the lidar sees it and the
+# costmaps have to plan around it.
+#
+# Served as /faults/spawn_obstacle by ral_faults/fault_manager.py (Phase 4.1).
+# Injection point: /world/<world>/create (gz UserCommands) - the entity is
+# created in the simulator, not drawn on a map.
+#
+# `pose` is in the gz WORLD frame, which is the frame gz entity poses are
+# defined in. It is NOT converted through world_to_map; only /initialpose and
+# the Nav2 goal are.
+#
+# `size` is the full extent (x, y, z) of the box in metres.
+#
+# `success` is true only when gz itself accepted the entity; `message` carries
+# gz's own reply verbatim when it did not.
+
+string name
+geometry_msgs/Pose pose
+geometry_msgs/Vector3 size
+---
+bool success
+string message

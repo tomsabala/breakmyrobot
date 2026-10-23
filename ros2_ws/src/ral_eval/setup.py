@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from glob import glob
+
 from setuptools import setup
 
 package_name = 'ral_eval'
@@ -24,6 +26,13 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        # Scenario files are RUNTIME INPUTS resolved through the share
+        # directory, so `ros2 run ral_eval run_scenario --scenario
+        # baseline_roomba` works from anywhere, and the QoS override file is
+        # passed to `ros2 bag record` by path. Both must be installed, not
+        # just tracked.
+        ('share/' + package_name + '/scenarios', glob('scenarios/*.yaml')),
+        ('share/' + package_name + '/config', glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -36,6 +45,9 @@ setup(
         'console_scripts': [
             'ground_truth_node = ral_eval.ground_truth_node:main',
             'capture_world_to_map = ral_eval.capture_world_to_map:main',
+            'run_scenario = ral_eval.run_scenario:main',
+            'compute_metrics = ral_eval.metrics:main',
+            'plot_run = ral_eval.plot_run:main',
         ],
     },
 )
