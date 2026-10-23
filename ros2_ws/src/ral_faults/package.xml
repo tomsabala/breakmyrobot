@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ral_faults</name>
+  <version>0.1.0</version>
+  <description>
+    Fault-injection boundary nodes. Each one sits on a real data path between a
+    simulated device and its consumers, so a fault changes the data a driver
+    would deliver rather than a dashboard field. Phase 2 contains one,
+    scan_fault_relay, which is the sole publisher of /scan and currently a
+    faithful pass-through of /scan_raw; Phase 4.2 adds scan degradation to it.
+  </description>
+  <maintainer email="noreply@example.com">Resilient Autonomy Lab</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
