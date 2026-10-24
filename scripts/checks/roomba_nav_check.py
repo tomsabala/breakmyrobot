@@ -760,7 +760,7 @@ def main() -> int:
         'committed static map and sends one `NavigateToPose` goal in room 3 that',
         'is reachable only through wall B\'s 0.70 m doorway. Every duration is sim',
         'time off `/clock`. This is the MVP plan\'s Phase 2 scope: no fault can be',
-        'injected yet, and no scenario runner or dashboard exists.',
+        'injected yet, and no dashboard exists; the scenario runner arrived in Phase 3.',
         '',
         f'## Result: {"all checks passed" if passed else "FAILURES PRESENT"}',
         '',

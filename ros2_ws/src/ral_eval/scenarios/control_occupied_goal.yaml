@@ -1,0 +1,40 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# NEGATIVE CONTROL. This scenario is EXPECTED TO BE REFUSED PRE-FLIGHT.
+#
+# The goal (8.0, 0.5) in the gz WORLD frame lies inside wall B. preflight_goal
+# samples the cells within the costmaps' robot_radius of it in the static map,
+# finds occupied ones, and the runner publishes MissionState `unreachable`
+# with outcome `not_sent:goal_cell_occupied` WITHOUT ever sending a goal:
+# run.json's goal_uuid stays null. The run still exits 0 with a complete bag,
+# metrics.json and plot.png, and every windowed metric is null carrying `no
+# mission window: final state 'unreachable'`. localization_converged_sim_s is
+# still MEASURED, because it does not depend on the mission window.
+#
+# A run of this scenario that reaches `succeeded` - or any state other than
+# `unreachable` - is a REGRESSION in preflight_goal, not a lucky mission.
+# Green runs prove the runner works; they do not prove it can refuse.
+#
+# It is committed rather than hand-edited per use because ENGINEERING.md
+# section 9 requires an unsuccessful experiment to be reproducible by someone
+# who was not there.
+
+experiment_id: control_occupied_goal
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 8.0, y: 0.5, yaw: 0.0}
+timeout_sec: 180

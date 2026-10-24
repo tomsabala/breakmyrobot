@@ -1,0 +1,36 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The Phase 2 mission, run through the Phase 3 harness: the same start, the
+# same goal in room 3, reachable from room 2 only through wall B's 0.70 m
+# doorway. Deliberately identical so this run's numbers are comparable with
+# docs/nav-closed-loop.md, which measured the same mission by hand.
+#
+# initial_pose and goal are in the gz WORLD frame, which is the frame the
+# world SDF, the spawn pose and ground truth are all expressed in. The runner
+# converts them to `map` with the measured world_to_map alignment before
+# publishing /initialpose or sending NavigateToPose, and records BOTH forms in
+# run.json so a reader can tell which frame a number is in.
+#
+# `seed` seeds ral_faults' RNG (Phase 4.2's scan noise and dropout) and
+# nothing else. AMCL is not seedable; see docs/repeatability.md.
+
+experiment_id: baseline_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 10.5, y: 6.5, yaw: 1.57}
+timeout_sec: 180
+interventions: []

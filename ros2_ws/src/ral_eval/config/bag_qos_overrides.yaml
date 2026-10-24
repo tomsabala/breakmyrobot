@@ -1,0 +1,43 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Subscription QoS for `ros2 bag record`, passed as
+# --qos-profile-overrides-path by ral_eval/run_scenario.py.
+#
+# /map and /tf_static are LATCHED (transient local) and are published ONCE,
+# before the recorder exists - map_server publishes the grid at activation and
+# robot_state_publisher publishes the static mounting transforms at start-up.
+# A volatile subscriber joining afterwards receives nothing at all.
+#
+# This file is a PIN, not a repair, and the control says so. Measured
+# 2026-10-23: with both entries deleted, the bag still contained 1 /map and 2
+# /tf_static messages, because rosbag2 adapts its subscription to the QoS the
+# existing publishers OFFER (it logs "Overriding subscription profile for
+# /map" only when this file is present). That adaptation depends on the
+# publisher already being there when the recorder subscribes, which holds today
+# only because run_scenario starts recording after the bring-up gate has seen
+# /map. These entries make the durability explicit instead of leaving the one
+# message the whole map panel depends on to that ordering.
+
+/map:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
+
+/tf_static:
+  history: keep_all
+  depth: 0
+  reliability: reliable
+  durability: transient_local
