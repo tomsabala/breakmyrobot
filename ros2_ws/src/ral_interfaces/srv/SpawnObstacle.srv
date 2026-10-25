@@ -23,14 +23,33 @@
 # defined in. It is NOT converted through world_to_map; only /initialpose and
 # the Nav2 goal are.
 #
-# `size` is the full extent (x, y, z) of the box in metres.
+# `size` is the full extent (x, y, z) of the box in metres. Every extent must
+# be positive and every numeric field finite; the manager refuses the request
+# otherwise rather than asking gz to build an impossible box.
+#
+# `name` must match [A-Za-z0-9_][A-Za-z0-9_-]{0,63}. It is substituted into the
+# SDF the manager sends to gz, inside `<model name="...">`, so a name carrying
+# XML would inject arbitrary content - a plugin element included - into the
+# running world, and a bare `&` or `<` would corrupt the document into a
+# confusing gz refusal. The manager refuses anything outside that set.
+#
+# `fault_id` is the join key for this fault instance: the value the caller will
+# see again on every FaultEvent the manager publishes for it. The scenario
+# runner sends the id it minted (<kind>_<1-based index after sorting by
+# at_sec>, scenario.py:308). An EMPTY string means "allocate one", which is
+# what the dashboard sends; the manager answers with <kind>_ui_<n>. The
+# RESPONSE carries the id the manager used - the one sent, or the minted one
+# when the request left it empty - so a caller can join its own request to the
+# events it caused without racing /fault_events.
 #
 # `success` is true only when gz itself accepted the entity; `message` carries
 # gz's own reply verbatim when it did not.
 
+string fault_id
 string name
 geometry_msgs/Pose pose
 geometry_msgs/Vector3 size
 ---
+string fault_id
 bool success
 string message

@@ -25,15 +25,41 @@
 # fault and would make the commanded-vs-achieved comparison meaningless.
 #
 # `enabled` false removes the wrench; the remaining fields are then ignored.
+# Disabling when no wrench is in force is a FAILURE, not a no-op. A disable
+# succeeds only when the clear was PUBLISHED on /world/<world>/wrench/clear
+# with the gz bridge subscribed - the same evidence `activated` rests on for
+# this kind. Without a subscriber the manager answers success=false, publishes
+# `rejected`, and KEEPS the fault in /faults/active: a wrench that cannot be
+# shown to have been removed must be assumed still in force. A disable
+# publishes `cleared` for the fault it removed and NO event of its own (the
+# kind is a singleton, so the disable is not itself something in force); its
+# id appears in that event's detail and in the service response.
 # `force_x_n`/`force_y_n` are newtons in the BODY frame, `torque_z_nm` is a
 # yaw torque in newton-metres - e.g. a torque alone models a dragging wheel.
+# All three must be finite; no magnitude bound is imposed, because any finite
+# wrench is one gz can apply and an implausibly large one is a visible result
+# rather than an invalid request.
+# The manager re-projects the body-frame force into the WORLD frame, the only
+# frame ApplyLinkWrench accepts, and re-projects it again as the robot turns.
 #
-# `success` is true only once gz has accepted the wrench.
+# `fault_id` is the join key for this fault instance: the value the caller will
+# see again on every FaultEvent the manager publishes for it. The scenario
+# runner sends the id it minted (<kind>_<1-based index after sorting by
+# at_sec>, scenario.py:308). An EMPTY string means "allocate one", which is
+# what the dashboard sends; the manager answers with <kind>_ui_<n>. The
+# RESPONSE carries the id the manager used - the one sent, or the minted one
+# when the request left it empty.
+#
+# `success` is true only once the wrench was published with the gz bridge
+# subscribed. gz acknowledges a wrench publication with nothing at all, so
+# that - and not an accepted entity - is what `activated` can mean here.
 
+string fault_id
 bool enabled
 float32 force_x_n
 float32 force_y_n
 float32 torque_z_nm
 ---
+string fault_id
 bool success
 string message

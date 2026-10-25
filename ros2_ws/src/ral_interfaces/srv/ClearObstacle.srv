@@ -17,11 +17,23 @@
 # Served as /faults/clear_obstacle by ral_faults/fault_manager.py (Phase 4.1).
 # Injection point: /world/<world>/remove (gz UserCommands).
 #
-# `name` must be the name the obstacle was spawned under. Removing a name that
-# was never spawned is a failure, not a no-op: a silent success would let a
-# run report a cleared fault that never existed.
+# `name` must be the name the obstacle was spawned under, and must match
+# SpawnObstacle's [A-Za-z0-9_][A-Za-z0-9_-]{0,63}. Removing a name that was
+# never spawned is a failure, not a no-op: a silent success would let a run
+# report a cleared fault that never existed.
+#
+# `fault_id` is the join key for this fault instance: the value the caller will
+# see again on every FaultEvent the manager publishes for it. The scenario
+# runner sends the id it minted (<kind>_<1-based index after sorting by
+# at_sec>, scenario.py:308). An EMPTY string means "allocate one", which is
+# what the dashboard sends; the manager answers with <kind>_ui_<n>. The
+# RESPONSE carries the id the manager used - the one sent, or the minted one
+# when the request left it empty. The manager also publishes `cleared` for the
+# SPAWN's id, so both ids appear.
 
+string fault_id
 string name
 ---
+string fault_id
 bool success
 string message
