@@ -1,0 +1,64 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# obstacle_roomba, plus the removal of the box: the only scenario that
+# exercises /faults/clear_obstacle end to end, and the only one in which a
+# fault instance reaches `cleared` because an operator asked for it rather
+# than because the mission ended.
+#
+# The spawn is BYTE-IDENTICAL to obstacle_roomba.yaml's, at_sec included: 20 s
+# sim after goal acceptance is when the robot is in room 1/2 and the box lands
+# ahead of it rather than on top of it. obstacle_roomba.yaml itself is not
+# touched, so its published runs stay comparable with this one.
+#
+# What this run adds, and what to read in the artifacts:
+#   * TWO fault instances, joinable by fault_id. The spawn's instance ends at
+#     `cleared` (detail: "removed by <clear id>"); the clear's own instance
+#     reaches `activated`. The clear is catalogued `oneshot` with
+#     cleared_by: null - it changes the world once and is not a state - so it
+#     never appears in /faults/active.
+#   * obstacle_min_clearance_m is measured ONLY over the ~13 s the box
+#     existed: the interval's t_end comes from the `cleared` event, not from
+#     the mission end, and a clearance measured against thin air would be no
+#     measurement at all.
+#   * Valid outcomes, all honest: a replan around the box followed by
+#     completion once it is gone, a wait, or an abort. Nothing here guarantees
+#     the robot benefits from the removal.
+#
+# Poses are in the gz WORLD frame. An obstacle pose stays in `world`: gz
+# entity poses are defined there, and converting one through world_to_map
+# would place the box somewhere else entirely.
+
+experiment_id: obstacle_cleared_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 10.5, y: 6.5, yaw: 1.57}
+timeout_sec: 180
+interventions:
+  # 20 s sim after goal acceptance, by which point the robot is in room 1/2
+  # and the box lands ahead of it rather than on top of it.
+  - at_sec: 20.0
+    type: spawn_obstacle
+    params:
+      name: blocker_1
+      pose: {x: 6.0, y: 3.0, yaw: 0.0}
+      size: {x: 1.2, y: 0.2, z: 0.6}
+  # 13 s later: long enough for the obstacle layer to mark the box and the
+  # planner to react to it, early enough that the mission is still running.
+  - at_sec: 33.0
+    type: clear_obstacle
+    params:
+      name: blocker_1

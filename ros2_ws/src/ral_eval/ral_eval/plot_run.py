@@ -284,7 +284,10 @@ def write_plot(run_dir: str) -> str:
                                       linestyle='--', edgecolor='#000000', linewidth=1.0))
 
     # Spawned obstacles, drawn DASHED when the intervention was not applied -
-    # the figure must never show an obstacle that never existed.
+    # the figure must never show an obstacle that never existed - and as the
+    # ORIENTED rectangle metrics.point_to_box measures. `map` is rotated
+    # relative to `world` by the measured alignment, so an axis-aligned patch
+    # would draw a box the clearance number was never computed against.
     for entry in run_json.get('interventions', []):
         if entry['type'] != 'spawn_obstacle':
             continue
@@ -292,9 +295,16 @@ def write_plot(run_dir: str) -> str:
         size = entry['params']['size']
         applied = entry.get('result') == 'applied'
         # The obstacle pose is WORLD frame; the panel is in `map`.
-        mx, my, _ = world_pose_to_map(pose['x'], pose['y'], pose['yaw'], wtm)
-        axis.add_patch(plt.Rectangle(
-            (mx - size['x'] / 2.0, my - size['y'] / 2.0), size['x'], size['y'],
+        mx, my, myaw = world_pose_to_map(pose['x'], pose['y'], pose['yaw'], wtm)
+        hx, hy = size['x'] / 2.0, size['y'] / 2.0
+        cos_yaw, sin_yaw = math.cos(myaw), math.sin(myaw)
+        # Polygon, not Rectangle(angle=..., rotation_point='center'):
+        # rotation_point needs matplotlib >= 3.6 and the container installs
+        # the distro python3-matplotlib, whose version is not guaranteed.
+        corners = [(mx + dx * cos_yaw - dy * sin_yaw, my + dx * sin_yaw + dy * cos_yaw)
+                   for dx, dy in ((-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy))]
+        axis.add_patch(plt.Polygon(
+            corners, closed=True,
             fill=applied, facecolor=COLOR_FAULT if applied else 'none',
             edgecolor=COLOR_FAULT, linewidth=1.6,
             linestyle='-' if applied else '--', alpha=0.6,

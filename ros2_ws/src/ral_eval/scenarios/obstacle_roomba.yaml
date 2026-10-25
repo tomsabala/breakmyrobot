@@ -15,13 +15,19 @@
 # The baseline mission plus one intervention, so the runner's dispatch path is
 # exercised by a real scenario rather than only by a unit test.
 #
-# IN PHASE 3 THIS FAULT DOES NOT HAPPEN. /faults/spawn_obstacle is served by
-# ral_faults/fault_manager.py, which arrives in Phase 4.1. Until then the
-# runner finds no service, publishes one FaultEvent with state `rejected`,
-# records `not_applied` in run.json and lets the mission continue - and
-# plot.png draws the obstacle outline DASHED, because it never existed. Phase
-# 4 needs no change here or in the runner: the same file becomes a real fault
-# run when the service appears.
+# THIS FAULT NOW HAPPENS. /faults/spawn_obstacle is served by
+# ral_faults/fault_manager.py, which calls /world/ral_apartment/create: gz
+# creates the box, the lidar sees it on the next sweep, the obstacle layer
+# marks it and the planner has to deal with it. The fields below are
+# unchanged from the Phase 3 version of this file, deliberately - the same
+# scenario that recorded `not_applied` against a missing service now records
+# `applied`, so the two runs are directly comparable.
+#
+# Expected outcomes, all valid: a replan around the box, a wait, or an abort.
+# What is measured: plan_publications against baseline_roomba's, a finite
+# fault_to_response_s, and obstacle_min_clearance_m above zero - the robot
+# must never intersect the box it was asked to avoid. plot.png draws the
+# obstacle SOLID when the intervention was applied and dashed when it was not.
 #
 # Poses are in the gz WORLD frame. An obstacle pose stays in `world`: gz
 # entity poses are defined there, and converting one through world_to_map

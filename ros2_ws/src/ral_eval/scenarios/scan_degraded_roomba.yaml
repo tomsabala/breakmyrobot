@@ -1,0 +1,72 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The baseline mission with a lidar that stops being trustworthy halfway
+# through it.
+#
+# What the parameters are chosen to do, and why each one matters:
+#
+#   max_range_m 2.5      The RPLIDAR A1 is modelled with a 12 m reach
+#                        (model.sdf), and the apartment's long walls are what
+#                        AMCL matches its particles against. Truncating to
+#                        2.5 m removes those walls from the scan: the filter
+#                        is left with whatever is within 2.5 m, which in a
+#                        corridor is two parallel surfaces that look the same
+#                        from many poses. This is the term that degrades
+#                        LOCALIZATION rather than obstacle avoidance.
+#   blind sector 90..150 Left-rear, in the sensor's own frame (CCW from the
+#                        robot's +x). Deliberately NOT forward: a forward
+#                        blind sector mostly produces a collision, which is a
+#                        different and much less interesting failure than a
+#                        filter that cannot tell where it is.
+#   noise sigma 0.08 m   Comparable to a cheap lidar's worst case, and large
+#                        against AMCL's 0.12 m measured map+alignment residual.
+#   dropout 0.2          One beam in five returns nothing, which thins the
+#                        match without removing the structure outright.
+#
+# The degradation is turned ON at 15 s sim after goal acceptance and is NEVER
+# turned off: the run shows what the robot does with a sensor that stays
+# broken. The manager clears it at the next mission start, not during this one.
+#
+# Expected outcomes, all valid and none retried: reaching the goal with a
+# larger est_error_max_m than baseline, wandering and timing out, or an abort.
+# The claim this run backs is narrower and is measured, not asserted -
+# metrics.json's scan_degradation_divergence must show /scan and /scan_raw
+# identical on every paired sweep BEFORE the activation stamp and differing
+# after it, which is what makes the degradation real rather than a label.
+#
+# HONESTY NOTE (fault_catalogue.yaml): this corrupts the LaserScan stream
+# between the sensor bridge and its consumers. The simulated lidar itself
+# stays healthy - Gazebo Harmonic cannot change SDF sensor noise at runtime.
+#
+# `seed` seeds the relay's RNG, so the corrupted stream repeats across runs of
+# this file. AMCL is not seedable, so the mission outcome is not.
+
+experiment_id: scan_degraded_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 10.5, y: 6.5, yaw: 1.57}
+timeout_sec: 180
+interventions:
+  - at_sec: 15.0
+    type: scan_degradation
+    params:
+      enabled: true
+      range_noise_stddev_m: 0.08
+      max_range_m: 2.5
+      blind_sector_start_deg: 90.0
+      blind_sector_end_deg: 150.0
+      dropout_probability: 0.2

@@ -1,0 +1,90 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The baseline mission with a plant that stops doing what it is told: a
+# persistent external wrench pushing BACK along the robot's own x axis, so
+# the commanded velocity and the achieved velocity diverge and the controller
+# has to cope.
+#
+# Why a force and not a /cmd_vel filter: intercepting the command would change
+# what the robot was ASKED to do, which is a different fault and would make
+# the commanded-vs-achieved comparison meaningless. The wrench changes what
+# the body DOES while the command is untouched.
+#
+# Why -60 N, MEASURED rather than derived. The first estimate was -15 N:
+# ral_roomba is 3.5 kg (34.3 N), its two driven wheels carry roughly half of
+# that and their friction coefficient is 1.0 (model.sdf; the casters are
+# frictionless), so available traction is about 17 N, and DiffDrive commands
+# wheel-joint VELOCITIES, which means a force below the traction limit is
+# absorbed by the wheels and changes nothing at all.
+#
+# The estimate was wrong, and the runs said so. Sweeping the force against
+# this plant at a commanded 0.400 m/s, with the gz bridge verified subscribed
+# (2026-10-24, image sha256:ce16e283):
+#
+#     -15 N   achieved 0.400 m/s   deficit   0%   (run: deficit 0.0%)
+#     -30 N   achieved 0.400 m/s   deficit   0%   (run: deficit 0.0%)
+#     -60 N   achieved 0.302 m/s   deficit  25%, and the body is pushed
+#             BACKWARDS 0.9 m over 3 s
+#    -120 N   achieved 0.041 m/s   deficit  90%
+#
+# -60 N is the first value that reaches the 20% deficit this scenario is
+# calibrated against, so it is the one committed. A force that produces no
+# deficit is not a mobility fault, and leaving -15 N here would have claimed
+# one that never happened.
+#
+# The same sweep, for the record, showed the plant is NOT immovable: 60 N
+# sideways slides it 3.5 m off its path, 10 N.m of yaw torque spins it, and
+# 40 N upwards lifts it off the floor. An external wrench on this robot is
+# real physics, not a no-op - it simply has to exceed what the wheels can
+# absorb.
+#
+# HONESTY NOTE (fault_catalogue.yaml): an external wrench on the base link,
+# not a degraded actuator. force_x_n/force_y_n are BODY-frame and are
+# re-projected into the world frame - the only frame ApplyLinkWrench accepts -
+# whenever the robot's yaw moves more than 0.15 rad, each re-projection
+# preceded by a wrench clear because gz ACCUMULATES persistent wrenches.
+# `activated` means the wrench was published with the gz bridge subscribed; gz
+# acknowledges nothing.
+#
+# 20 s sim after goal acceptance: the robot is under way and out of the start
+# room, so the deficit shows against a steady commanded speed rather than
+# against the acceleration ramp.
+#
+# What -60 N did to the MISSION, measured (run
+# mobility_fault_roomba_20261024T211358Z): cmd_vs_achieved's linear
+# mean_abs_error rose from 0.0036 m/s in baseline_roomba to 0.229 m/s, the
+# achieved/commanded ratio after the activation stamp was 0.85 (a 15% mean
+# deficit over a window in which the controller spends much of its time in
+# recovery behaviours at low commanded speed; the steady-command figure is
+# the 25% above), truth shows the body pushed BACKWARDS through the doorway
+# while AMCL kept believing it was advancing - est_error_max_m 7.44 m - and
+# the mission ENDED IN STATUS_ABORTED after 21 recoveries and 2 contacts. The
+# robot failing is the correct outcome here and is not retried.
+
+experiment_id: mobility_fault_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 10.5, y: 6.5, yaw: 1.57}
+timeout_sec: 180
+interventions:
+  - at_sec: 20.0
+    type: mobility_fault
+    params:
+      enabled: true
+      force_x_n: -60.0
+      force_y_n: 0.0
+      torque_z_nm: 0.0

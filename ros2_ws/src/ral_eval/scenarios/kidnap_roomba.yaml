@@ -1,0 +1,56 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The kidnapped-robot problem: at 25 s sim the body is teleported about 4 m
+# BACKWARDS, through wall A's doorway into room 1, while nothing tells the
+# localizer. Wheel odometry is continuous across the jump (the wheels did not
+# turn), so AMCL's estimate is suddenly, genuinely wrong and must recover from
+# its own observations alone.
+#
+# Nothing touches /initialpose or /amcl_pose. Resetting the filter would STAGE
+# the recovery instead of demonstrating it, and the recovery is the only thing
+# this run has to show.
+#
+# The destination (2.0, 6.5) in the gz WORLD frame is clear of furniture_a at
+# (2.0, 5.5) with half-extents 0.4 x 0.3 (its near face is y = 5.8, 0.7 m
+# away) and of the north wall, whose inner face is y = 7.95. The pose is NOT
+# converted through world_to_map: gz entity poses are defined in `world`.
+#
+# Expected outcomes, ALL valid and reported as whatever happens: AMCL
+# reconverges on the new pose and the mission continues; or the filter stays
+# confidently wrong, the robot drives against the map it believes in, and the
+# mission aborts or times out. AMCL's global_localization service is NOT
+# called - a filter that is told to relocalize is not a filter that recovered.
+#
+# What is measured either way: teleport_excluded_m should be about the
+# teleport distance (path_length_m excludes the jump, because the robot did
+# not drive it) and est_error_max_m should spike to roughly the same number at
+# the activation stamp.
+#
+# HONESTY NOTE (fault_catalogue.yaml): this teleports the body. Linear and
+# angular velocity are NOT zeroed, so the robot keeps the twist it had, and z
+# is set by the manager (the scenario schema has no z).
+
+experiment_id: kidnap_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 10.5, y: 6.5, yaw: 1.57}
+timeout_sec: 180
+interventions:
+  - at_sec: 25.0
+    type: kidnap
+    params:
+      pose: {x: 2.0, y: 6.5, yaw: 0.0}

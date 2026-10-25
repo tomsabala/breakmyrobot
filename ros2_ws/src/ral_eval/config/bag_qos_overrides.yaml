@@ -41,3 +41,13 @@
   depth: 0
   reliability: reliable
   durability: transient_local
+
+# /faults/active is latched too, and its FIRST message is the empty snapshot
+# the fault manager publishes at start-up - before the recorder exists. That
+# empty latch is the evidence that the manager was running and holding
+# nothing, which is a different claim from the topic being absent.
+/faults/active:
+  history: keep_last
+  depth: 1
+  reliability: reliable
+  durability: transient_local
