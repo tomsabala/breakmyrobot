@@ -45,6 +45,7 @@ setup(
         'console_scripts': [
             'ground_truth_node = ral_eval.ground_truth_node:main',
             'capture_world_to_map = ral_eval.capture_world_to_map:main',
+            'ekf_local_tf = ral_eval.ekf_local_tf:main',
             'run_scenario = ral_eval.run_scenario:main',
             'compute_metrics = ral_eval.metrics:main',
             'plot_run = ral_eval.plot_run:main',

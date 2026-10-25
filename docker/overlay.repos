@@ -20,3 +20,17 @@ repositories:
     type: git
     url: https://github.com/ros/sdformat_urdf.git
     version: humble
+  # The `ros2` branch, not `main`: it is the branch carrying the ament
+  # environment hooks (SDF_PATH, GZ_SIM_SYSTEM_PLUGIN_PATH,
+  # GZ_SIM_RESOURCE_PATH, upstream commit "Add SDF_PATH to the environment
+  # hooks"), so sourcing /opt/gz_ws/install/setup.bash is what makes
+  # ArduPilotPlugin loadable by name from a model's <plugin filename=...>.
+  # `main` carries the same plugin code without those hooks.
+  #
+  # ArduPilot/SITL_Models is deliberately NOT imported: no SITL_Models entry is
+  # an Ackermann car, which is why this project authors ral_car itself, and the
+  # repository is ~100 MB of models nothing here loads.
+  ardupilot_gazebo:
+    type: git
+    url: https://github.com/ArduPilot/ardupilot_gazebo.git
+    version: ros2

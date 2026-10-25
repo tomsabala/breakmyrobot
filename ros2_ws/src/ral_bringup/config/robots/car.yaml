@@ -1,0 +1,201 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# One robot's profile: everything about `car` that code must not hardcode.
+#
+# This file is the single source for the gz model name, the spawn pose, the
+# autonomy stack that drives it, what its position estimate IS, the plant
+# limits, the footprint, which faults are real for it and which topics a run
+# records. ral_eval/ral_eval/robot_profile.py is the only loader; the launch
+# file passes the path, because ral_bringup exec_depends both ral_eval and
+# ral_faults while ral_eval depends on neither, so that is the only package
+# the loader can live in without closing a cycle.
+#
+# A robot with no profile is an ERROR, never an implicit allow: the fault
+# manager refuses rather than guessing that an unknown platform supports
+# everything, and the runner aborts before a run directory is created.
+#
+# `model` is the gz entity name the wrench and the teleport address, and the
+# name robot_sim.launch.py spawns the body under. `estimate` and `command` are
+# what metrics.py and plot_run.py LABEL their numbers with: every truth-vs-
+# estimate figure in metrics.json names the estimator it was measured against,
+# and that name comes from here rather than from a module constant.
+#
+# This platform runs NO Nav2 and NO AMCL. ArduRover SITL plans and controls
+# inside the autopilot, EKF3 estimates the pose, and MAVROS is the only link
+# between that autopilot and ROS.
+
+robot: car
+model: ral_car
+description_model: ral_car
+stack_launch: car_nav.launch.py
+bridge_config: bridge_car_{world}.yaml
+
+# World frame. x/y/yaw are DEFAULTS: the scenario's initial_pose overrides
+# them, so the pose the scenario declares and the pose the body is spawned at
+# cannot disagree. z is NOT overridable - it is a property of the body.
+spawn:
+  x: 1.0
+  y: 1.0
+  z: 0.06
+  yaw: 0.0
+  z_source: "the 0.06 m wheel radius: base_link's origin is the axle plane, so this puts the tyres on the floor (the hull is offset 0.04 m above it in ral_car/model.sdf)"
+
+# What this robot believes about where it is. Nothing here is simulator truth:
+# EKF3 fuses the IMU and the SITL-synthesised GPS inside the autopilot, and
+# MAVROS republishes the result as LOCAL_POSITION_NED in ENU.
+estimate:
+  topic: /mavros/local_position/odom
+  type: nav_msgs/msg/Odometry
+  # NOT `map`. The EKF origin is set by the autopilot at its first GPS fix, so
+  # the offset between the gz `world` frame and this one is a per-run
+  # MEASUREMENT, made by ral_eval's ekf_local_tf node and published on
+  # /frame_alignment. metrics.py composes it to express the estimate in `map`.
+  frame: ekf_local
+  label: "ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED)"
+  tf_source: ekf_local_tf
+  uncertainty:
+    # ArduPilot does not send LOCAL_POSITION_NED_COV, so there is no pose
+    # covariance to take a trace of. VERIFIED (`ros2 interface show
+    # mavros_msgs/msg/EstimatorStatus` in this image): this mavros republishes
+    # ESTIMATOR_STATUS as its twelve FLAG BITS only and drops MAVLink's
+    # pos_horiz_accuracy / pos_horiz_ratio, so this platform publishes NO
+    # numeric pose uncertainty at all.
+    #
+    # MEASURED further: requesting ESTIMATOR_STATUS at 2 Hz through MAVLink2
+    # SET_MESSAGE_INTERVAL is REFUSED by this ArduRover
+    # (MessageInterval_Response success=False, visible in launch.log), so the
+    # topic is in every bag with zero messages and even the flags are
+    # unavailable. est_cov_trace_max, est_pos_horiz_accuracy_max_m and
+    # est_status_flags are therefore all null for this robot, each naming
+    # that. The truth-vs-estimate error itself is unaffected: it is measured
+    # from /mavros/local_position/odom, which does stream.
+    kind: estimator_status
+    topic: /mavros/estimator_status
+
+command:
+  kind: position_setpoint
+  topic: /mavros/setpoint_position/local
+  label: "GUIDED position setpoint (SET_POSITION_TARGET_LOCAL_NED)"
+
+mission_driver: mavros_guided
+
+plant:
+  max_linear_m_s: 1.0
+  # max_linear / min_turn_radius. A car's yaw rate is not an independent
+  # command: it is whatever the speed and the steering angle produce.
+  max_angular_rad_s: 1.64
+  min_turn_radius_m: 0.611
+  source: >-
+    rover_ackermann.parm CRUISE_SPEED/WP_SPEED 1.0; radius is geometric,
+    wheelbase 0.35 / tan(0.52), from ral_description/models/ral_car/model.sdf
+
+footprint:
+  # Half-diagonal of the 0.50 x 0.30 base box: hypot(0.25, 0.15) = 0.2915.
+  radius_m: 0.292
+  source: "ral_description/models/ral_car/model.sdf base_collision box 0.50 x 0.30"
+
+# Arrival is a CONJUNCTION, and both halves are the robot's own.
+#
+# The first half is ArduRover's WP_RADIUS, in rover_ackermann.parm, read back
+# as NAV_CONTROLLER_OUTPUT.wp_dist. That field is uint16 METRES and TRUNCATES,
+# so a reported 1 means anywhere in [1, 2): on its own it cannot bound where
+# the vehicle came to rest. MEASURED, with WP_RADIUS 2.0 and no estimate-side
+# gate: three runs reported wp_dist 2 and came to rest 2.87-2.96 m from the
+# goal, short of the doorway the mission crosses.
+#
+# The second half is arrival_estimate_tolerance_m below, which is a real
+# distance. goal_pose_error_m is read against
+# arrival_estimate_tolerance_m + footprint radius + this run's measured
+# estimate error, not against the metre quantum.
+goal_tolerance_m: 1.0
+
+# The runner's own arrival gate, applied to |robot estimate - commanded
+# setpoint| in the autopilot's ekf_local frame. Truth is never read: both
+# terms come from /mavros/local_position/odom and the setpoint this run
+# published. It exists because wp_dist is quantised to whole metres;
+# 1.5 m is WP_RADIUS 1.0 plus 0.5 m for the stop transient.
+arrival_estimate_tolerance_m: 1.5
+kidnap_z_m: 0.06
+
+# The autopilot parameter file this platform is started with, relative to
+# ral_bringup's config/ directory. car_nav.launch.py passes it to ardurover as
+# --defaults, and run_scenario hashes it into env.json, so a run can name the
+# autopilot configuration that produced it instead of a reader having to
+# assume the committed one was current.
+autopilot_parm: rover_ackermann.parm
+
+# The gate: one message on each of these before a run may start. A stack that
+# never comes up is a failed run with artifacts, not a traceback.
+#
+# The limit is WALL seconds, and is far longer than the Roomba's 90 because
+# this platform cannot report a position until the AUTOPILOT has one: EKF3
+# sets its origin only once the simulated u-blox reaches a 3D fix, and
+# /frame_alignment cannot be measured until the estimate exists.
+#
+# MEASURED on this host from the three committed baseline_car runs, relative
+# to run.json's started_utc (runs/baseline_car_20261025T121041Z,
+# ...T121149Z and ...T121256Z): the first node line at +0.9 to +1.2 s,
+# "EKF3 IMU0 origin set" at +28.7, +29.8 and +33.9 s, and ekf_local_tf's
+# "world -> ekf_local measured" at +49.4, +49.7 and +55.1 s. A 90 s gate is
+# close enough to the slowest of those to fail a stack that is coming up
+# correctly; 240 s is NOT itself a measurement but roughly 4x the slowest
+# bring-up observed, chosen so that a gate expiry means a stack that is
+# genuinely not coming up.
+bringup_wall_limit_s: 240.0
+
+bringup_topics:
+  - {topic: /clock, type: rosgraph_msgs/msg/Clock}
+  - {topic: /ground_truth/odom, type: nav_msgs/msg/Odometry}
+  - {topic: /scan, type: sensor_msgs/msg/LaserScan}
+  - {topic: /mavros/state, type: mavros_msgs/msg/State}
+  - {topic: /mavros/local_position/odom, type: nav_msgs/msg/Odometry}
+  - {topic: /frame_alignment, type: ral_interfaces/msg/FrameAlignment}
+
+# Appended to run_scenario.RECORD_TOPICS_COMMON. These are the ones that exist
+# only because this platform is an autopilot behind MAVROS.
+record_topics:
+  - /mavros/state                           # mode and armed: every terminal outcome
+  - /mavros/local_position/odom             # the estimate itself
+  - /mavros/estimator_status                # est_status_flags / est_pos_horiz_accuracy_max_m: recorded, currently zero messages (see the uncertainty note above)
+  - /mavros/nav_controller_output/output    # wp_dist, the FCU's own distance to go
+  - /mavros/setpoint_position/local         # what was actually commanded
+  - /frame_alignment                        # the measured world->ekf_local offset
+
+# Topics whose PRE-MISSION history is evidence: nothing may be published on
+# them until the recorder has actually subscribed.
+recorder_gate_topics:
+  - /frame_alignment
+  - /mavros/local_position/odom
+
+faults: [spawn_obstacle, clear_obstacle, mobility_fault, kidnap]
+
+unsupported:
+  scan_degradation: "ArduRover's navigation does not consume the lidar; degrading it has no effect on this platform."
+
+estimator_label: EKF3
+
+# MEASURED on this plant after the rear-wheel actuator was resized, against
+# mobility_fault_car run with the wrench enabled and ZERO - the same mission,
+# the same activation instant, so the comparison is like for like. All three
+# numbers are `speed_vs_target.after_activation.mean_achieved_m_s`. The fault
+# manager publishes this text verbatim in the `activated` detail, so every
+# number in it is one a run produced.
+mobility_note: >-
+  a body-frame -40 N wrench leaves the mean achieved speed at 0.773 m/s
+  against an unfaulted 0.922 m/s over the same part of the same mission - a
+  16% deficit, below the 20% this fault is calibrated to - while -80 N
+  reverses it to -0.085 m/s: the body is pushed backwards, the autopilot
+  makes no progress at all (its own estimate moved 0.164 m in 15 s sim), and
+  the mission ends in the runner's deterministic no-progress safe stop.

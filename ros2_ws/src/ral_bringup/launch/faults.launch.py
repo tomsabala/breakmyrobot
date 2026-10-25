@@ -38,13 +38,16 @@ or ROS->gz topic equals its gz name. That is why the manager publishes on
 Keeping all five on ONE extra node is a deliberate trade: the alternative is a
 second per-world YAML for the two wrench topics plus a CLI node for the three
 services, i.e. another file that must be kept in step with
-bridge_roomba_<world>.yaml every time a world is added.
+bridge_<robot>_<world>.yaml every time a world is added.
 
-The node NAME must differ from roomba_sim.launch.py's `ros_gz_bridge`. Two
+The node NAME must differ from robot_sim.launch.py's `ros_gz_bridge`. Two
 nodes with the same name in one domain is a name collision: ROS 2 does not
 refuse it, it just makes parameters, logs and `ros2 node info` ambiguous.
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -53,6 +56,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description() -> LaunchDescription:
+    bringup_share = get_package_share_directory('ral_bringup')
     world = LaunchConfiguration('world')
     robot = LaunchConfiguration('robot')
     seed = LaunchConfiguration('seed')
@@ -63,9 +67,9 @@ def generate_launch_description() -> LaunchDescription:
             description='World name: the gz service and wrench topic paths embed it.'),
         DeclareLaunchArgument(
             'robot', default_value='roomba',
-            description='Robot key in ral_faults/config/capabilities.yaml: selects '
-                        'the gz model the wrench and the teleport address, and which '
-                        'faults are supported at all.'),
+            description='Robot key: selects ral_bringup/config/robots/<robot>.yaml, '
+                        'and with it the gz model the wrench and the teleport '
+                        'address and which faults are supported at all.'),
         DeclareLaunchArgument(
             'seed', default_value='1',
             description="The scenario's seed. Governs scan_fault_relay's noise and "
@@ -92,6 +96,12 @@ def generate_launch_description() -> LaunchDescription:
                 'use_sim_time': True,
                 'world': world,
                 'robot': robot,
+                # ral_faults cannot resolve ral_bringup's share directory -
+                # ral_bringup exec_depends ral_faults, and colcon refuses the
+                # reverse edge - so the profile path is supplied from here,
+                # where that directory is already known.
+                'profile_path': [os.path.join(bringup_share, 'config', 'robots', ''),
+                                 robot, '.yaml'],
             }],
             output='screen'),
 

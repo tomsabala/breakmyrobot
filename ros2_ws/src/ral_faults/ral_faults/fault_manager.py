@@ -29,10 +29,11 @@ strength of a message having been sent.
 
 So this node is the single authority on three things:
 
-  * the CAPABILITY GATE   - capabilities.yaml says which faults are real for
-                            the selected robot; an unsupported request is
-                            `rejected` with that file's reason VERBATIM, never
-                            attempted.
+  * the CAPABILITY GATE   - the robot profile
+                            (ral_bringup/config/robots/<robot>.yaml) says
+                            which faults are real for the selected robot; an
+                            unsupported request is `rejected` with that file's
+                            reason VERBATIM, never attempted.
   * the EVENT STREAM      - it publishes `requested`, `activated`, `rejected`
                             and `cleared` on /fault_events. The scenario runner
                             publishes exactly one thing, `rejected`, and only
@@ -103,13 +104,11 @@ from nav_msgs.msg import Odometry
 from ral_faults.catalogue import (
     check_params,
     kind_entry,
-    load_capabilities,
     load_catalogue,
-    model_of,
-    supports,
     target_for,
 )
 from ral_faults.lifecycle import FaultRegistry, mission_start_is_new
+from ral_eval.robot_profile import load_profile, supports
 from ral_interfaces.msg import ActiveFaults, FaultEvent, MissionState
 from ral_interfaces.srv import (
     ClearObstacle,
@@ -176,7 +175,9 @@ class FaultManager(Node):
         self.declare_parameter('world', 'ral_apartment')
         self.declare_parameter('robot', 'roomba')
         self.declare_parameter('catalogue_path', '')
-        self.declare_parameter('capabilities_path', '')
+        # ral_bringup/config/robots/<robot>.yaml. Supplied by the launch file,
+        # never resolved here: see robot_profile.py's module docstring.
+        self.declare_parameter('profile_path', '')
         self.declare_parameter('truth_topic', '/ground_truth/odom')
         self.declare_parameter('relay_service', '/scan_fault_relay/set_degradation')
         # WALL seconds. These guard discovery and a gz reply, both of which
@@ -188,9 +189,9 @@ class FaultManager(Node):
         # 1% of its intended body direction (1 - cos(0.15)).
         self.declare_parameter('wrench_reproject_rad', 0.15)
         self.declare_parameter('wrench_clear_settle_s', 0.05)
-        # The spawn height ral_roomba is placed at; the scenario schema's
-        # kidnap pose carries x/y/yaw only and a z of 0 would bury the wheels.
-        self.declare_parameter('kidnap_z', 0.05)
+        # The spawn height is the robot's, and comes from its profile: the
+        # scenario schema's kidnap pose carries x/y/yaw only, and a z of 0
+        # would bury the wheels of either platform at a different depth.
 
         self.world = self._string_param('world')
         self.robot = self._string_param('robot')
@@ -202,14 +203,26 @@ class FaultManager(Node):
             'wrench_reproject_rad').get_parameter_value().double_value
         self.clear_settle_s = self.get_parameter(
             'wrench_clear_settle_s').get_parameter_value().double_value
-        self.kidnap_z = self.get_parameter('kidnap_z').get_parameter_value().double_value
 
-        # A missing or malformed catalogue/capability file RAISES here, so the
-        # node fails to start instead of serving faults whose metadata it
-        # would have to invent.
+        # A missing or malformed catalogue or profile RAISES here, so the node
+        # fails to start instead of serving faults whose metadata, gz entity
+        # or capability list it would have to invent.
         self.catalogue = load_catalogue(self._string_param('catalogue_path'))
-        self.capabilities = load_capabilities(self._string_param('capabilities_path'))
-        self.model = model_of(self.capabilities, self.robot)
+        profile_path = self._string_param('profile_path')
+        if not profile_path:
+            raise ValueError(
+                'profile_path is empty: the robot profile lives in '
+                'ral_bringup/config/robots/<robot>.yaml and its path must be supplied '
+                'by the launch file, because ral_bringup depends on this package')
+        self.profile = load_profile(profile_path)
+        if self.profile['robot'] != self.robot:
+            raise ValueError(
+                f'the `robot` parameter is {self.robot!r} but {profile_path} describes '
+                f'{self.profile["robot"]!r}; the manager would gate faults for one '
+                'platform and apply them to another')
+        self.model = self.profile['model']
+        self.kidnap_z = float(self.profile['kidnap_z_m'])
+        self.estimator = self.profile['estimator_label']
 
         # One reentrant group for everything that can call out while serving:
         # see the module docstring.
@@ -275,7 +288,7 @@ class FaultManager(Node):
 
         self.get_logger().info(
             f'fault_manager: world {self.world}, robot {self.robot} (gz model '
-            f'{self.model}), faults {sorted(self.capabilities[self.robot]["faults"])}, '
+            f'{self.model}), faults {sorted(self.profile["faults"])}, '
             f'relay {self.relay_service}')
 
     def _string_param(self, name: str) -> str:
@@ -337,7 +350,7 @@ class FaultManager(Node):
 
     def _gate(self, kind: str) -> 'str | None':
         """Return the capability refusal reason for this robot, or None."""
-        return supports(self.capabilities, self.robot, kind)
+        return supports(self.profile, kind)
 
     def _register(self, key, fault_id: str, kind: str, target: str, params: dict,
                   event: FaultEvent, detail, extra: dict = None) -> None:
@@ -792,8 +805,16 @@ class FaultManager(Node):
         if active is not None:
             self._event(active['fault_id'], kind, target, FaultEvent.STATE_CLEARED,
                         f'superseded by {fault_id}')
+        # The catalogue's note is platform-independent: what a wrench IS, and
+        # what `activated` claims. What a wrench DOES depends on the plant it
+        # is applied to - a deficit ladder measured on the Roomba says nothing
+        # about the car - so the measured half comes from the robot profile
+        # and is published verbatim beside it.
         note = kind_entry(self.catalogue, kind)['honesty_note']
         detail = f'{detail}. {note}'
+        plant_note = str(self.profile.get('mobility_note', '')).strip()
+        if plant_note:
+            detail = f'{detail} On {self.robot}: {plant_note}'
         event = self._event(fault_id, kind, target, FaultEvent.STATE_ACTIVATED, detail)
         params = {'enabled': True, 'force_x_n': request.force_x_n,
                   'force_y_n': request.force_y_n, 'torque_z_nm': request.torque_z_nm}
@@ -863,8 +884,9 @@ class FaultManager(Node):
         note = kind_entry(self.catalogue, kind)['honesty_note']
         detail = (f'gz moved {self.model} to world ({gz_request.pose.position.x:.3f}, '
                   f'{gz_request.pose.position.y:.3f}, z={self.kidnap_z:.3f} substituted '
-                  'by the manager). Wheel odometry is continuous across this, so AMCL '
-                  f'is now wrong by the teleport distance and must recover alone. {note}')
+                  'by the manager). The body moved with no actuation and no inertial '
+                  f'signature, so {self.estimator} is now wrong by the teleport '
+                  f'distance and must recover alone. {note}')
         self._event(fault_id, kind, target, FaultEvent.STATE_ACTIVATED, detail)
         # A one-shot: the world changed once. There is no state to hold and
         # nothing to clear, so it never enters /faults/active.

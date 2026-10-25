@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measure the spread of one scenario over N identical runs and write
-# docs/repeatability.md.
+# docs/repeatability-<experiment_id>.md.
 #
 #   scripts/checks/repeatability_check.sh
 #   RAL_REPEAT_COUNT=5 RAL_REPEAT_EXPERIMENT=baseline_roomba \

@@ -87,12 +87,15 @@ def test_interventions_are_sorted_by_time_and_given_stable_ids():
 
 def test_an_unknown_world_is_refused_with_what_a_new_world_needs():
     message = _rejects(_with(world='ral_kitchen'), 'world')
-    assert 'bridge_roomba_' in message
+    assert 'bridge_' in message
     assert 'frames.yaml' in message
 
 
-def test_the_car_is_refused_until_phase_5():
-    _rejects(_with(robot='car'), 'robot')
+def test_a_robot_with_no_profile_is_refused_naming_what_integration_means():
+    """Accepting it would run one platform and label the result as another."""
+    message = _rejects(_with(robot='forklift'), 'robot')
+    assert 'config/robots/' in message
+    assert 'roomba' in message and 'car' in message
 
 
 def test_a_missing_goal_is_refused():

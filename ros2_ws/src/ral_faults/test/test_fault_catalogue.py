@@ -13,11 +13,12 @@
 # limitations under the License.
 
 """
-The fault catalogue and the capability table, pinned against their consumers.
+The fault catalogue and the robot profiles, pinned against their consumers.
 
 config/fault_catalogue.yaml is what fault_manager publishes every FaultEvent
-from, and config/capabilities.yaml is the gate every request passes. The
-runner is what sends the request. A drift between them does not raise: it
+from, and ral_bringup/config/robots/<robot>.yaml is the gate every request
+passes. The runner is what sends the request. A drift between them does not
+raise: it
 sends a fault to a service nobody serves, or labels an injection point that
 was not the one altered - and both read as a working run. This file is where
 that drift fails instead.
@@ -31,8 +32,11 @@ to order packages topologically"), because ral_bringup already exec_depends
 both.
 
 The files are read with plain yaml, by SOURCE path rather than through
-ral_faults.catalogue: a loader that silently defaulted a missing field could
-not hide the drift this test exists to catch.
+ral_faults.catalogue or robot_profile: a loader that silently defaulted a
+missing field could not hide the drift this test exists to catch. The
+profiles are read out of ral_bringup's source tree directly, for the same
+acyclic reason as above: a <test_depend> on ral_bringup would be the edge
+colcon refuses.
 """
 
 import os
@@ -47,11 +51,25 @@ import yaml
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           'config')
+PROFILE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    'ral_bringup', 'config', 'robots')
 
 
 def _config(filename: str) -> dict:
     with open(os.path.join(CONFIG_DIR, filename)) as handle:
         return yaml.safe_load(handle) or {}
+
+
+def _profiles() -> dict:
+    """{robot: profile} for every committed robot profile."""
+    found = {}
+    for name in sorted(os.listdir(PROFILE_DIR)):
+        if not name.endswith('.yaml'):
+            continue
+        with open(os.path.join(PROFILE_DIR, name)) as handle:
+            found[name[:-len('.yaml')]] = yaml.safe_load(handle) or {}
+    return found
 
 
 def test_the_fault_catalogue_covers_exactly_the_kinds_the_runner_dispatches():
@@ -111,25 +129,27 @@ def test_the_catalogue_bounds_agree_with_the_scenario_schemas_bounds():
 def test_the_catalogue_target_rules_reproduce_the_runners_target_field():
     """FaultEvent.target must read the same whoever published it."""
     catalogue = _config('fault_catalogue.yaml')['faults']
-    model = _config('capabilities.yaml')['roomba']['model']
     params = {'name': 'blocker_1'}
-    for kind, entry in catalogue.items():
-        rule = entry['target_rule']
-        if rule == 'params.name':
-            expected = params['name']
-        elif rule == 'model':
-            expected = model
-        else:
-            expected = rule.split(':', 1)[1]
-        assert expected == run_scenario._target_of(kind, params), kind
+    for robot, profile in _profiles().items():
+        model = profile['model']
+        for kind, entry in catalogue.items():
+            rule = entry['target_rule']
+            if rule == 'params.name':
+                expected = params['name']
+            elif rule == 'model':
+                expected = model
+            else:
+                expected = rule.split(':', 1)[1]
+            assert expected == run_scenario._target_of(kind, params, model), \
+                (robot, kind)
 
 
 def test_every_fault_a_robot_claims_to_support_exists_in_the_catalogue():
-    """A capability naming a kind with no catalogue entry would be unservable."""
+    """A profile naming a kind with no catalogue entry would be unservable."""
     catalogue = _config('fault_catalogue.yaml')['faults']
-    capabilities = _config('capabilities.yaml')
-    assert capabilities, 'capabilities.yaml declares no robots'
-    for robot, entry in capabilities.items():
+    profiles = _profiles()
+    assert profiles, f'{PROFILE_DIR} declares no robots'
+    for robot, entry in profiles.items():
         assert entry.get('model'), f'{robot} has no gz model name'
         for kind in entry['faults']:
             assert kind in catalogue, f'{robot} claims {kind}, which is not catalogued'
@@ -141,9 +161,8 @@ def test_every_fault_a_robot_claims_to_support_exists_in_the_catalogue():
 
 def test_a_refused_fault_states_a_reason_an_operator_can_read():
     """The dashboard and the FaultEvent carry this string verbatim."""
-    capabilities = _config('capabilities.yaml')
     catalogue = _config('fault_catalogue.yaml')['faults']
-    for robot, entry in capabilities.items():
+    for robot, entry in _profiles().items():
         for kind in set(catalogue) - set(entry['faults']):
             reason = (entry.get('unsupported') or {}).get(kind)
             assert reason, (

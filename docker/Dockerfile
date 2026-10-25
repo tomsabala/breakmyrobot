@@ -33,6 +33,13 @@ RUN wget -q https://packages.osrfoundation.org/gazebo.gpg \
 # mirrors mid-fetch often enough to produce "Hash Sum mismatch" (observed once
 # while building this image); retries plus a disabled HTTP pipeline make an
 # index fault recoverable instead of fatal to a multi-minute build.
+#
+# The last line is ArduPilot's waf build dependency set (Phase 5, the car):
+# waf's configure step imports `future` and `pexpect`, builds its tool modules
+# with setuptools/wheel, and uses ccache when present to keep a rebuild of the
+# SITL rover inside the same memory cap as the ros_gz compile. They are listed
+# here, in the apt layer, because docker/build_overlay.sh is a capped
+# `docker run` with no package installation of its own.
 RUN printf 'Acquire::Retries "5";\nAcquire::http::Pipeline-Depth "0";\n' \
       > /etc/apt/apt.conf.d/80-ral-apt \
  && apt-get update && apt-get install -y --no-install-recommends \
@@ -43,6 +50,7 @@ RUN printf 'Acquire::Retries "5";\nAcquire::http::Pipeline-Depth "0";\n' \
       ros-humble-tf-transformations ros-humble-xacro \
       ros-humble-robot-state-publisher ros-humble-teleop-twist-keyboard \
       python3-transforms3d python3-numpy python3-matplotlib python3-yaml python3-pytest \
+      python3-future python3-pexpect python3-setuptools python3-wheel ccache \
  && rm -rf /var/lib/apt/lists/*
 
 # MAVROS refuses to start without the GeographicLib geoid/gravity datasets.
@@ -68,6 +76,7 @@ RUN wget -q https://raw.githubusercontent.com/osrf/osrf-rosdep/master/gz/00-gaze
 # build_overlay.sh in a memory-capped container and commits the result as
 # ral:overlay, so this image stops at the toolchain.
 COPY overlay.repos /tmp/overlay.repos
+COPY ardupilot.repos /tmp/ardupilot.repos
 COPY build_overlay.sh /usr/local/bin/build_overlay.sh
 RUN chmod +x /usr/local/bin/build_overlay.sh
 

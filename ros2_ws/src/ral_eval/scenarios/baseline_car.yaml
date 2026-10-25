@@ -1,0 +1,56 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The car's nominal mission: room 1 to room 2, straight through wall A's
+# 0.90 m doorway at (4.0, 4.0). An 0.30 m-wide vehicle with a 0.611 m minimum
+# turning radius can take that gap.
+#
+# THE START AND GOAL ARE ON THE DOORWAY'S LINE, and that is a property of the
+# PLATFORM, not a convenience. ArduRover has no path planner and no obstacle
+# avoidance: in GUIDED it steers at the target and drives, so any interior
+# wall between the two is a wall it will drive into. MEASURED: with the goal
+# at (6.5, 6.0) from a start at (1.0, 1.0) the car curved into wall A's lower
+# segment and spent the rest of the run pinned against it at (3.70, 2.08),
+# 4.8 m short. Siting the mission where a straight line clears the gap is the
+# honest way to test this platform's closed loop; expecting it to route around
+# geometry is testing a planner it does not have.
+#
+# The start is also clear of the west wall, because an Ackermann vehicle
+# cannot rotate in place and needs room to begin turning.
+#
+# initial_pose and goal are in the gz WORLD frame, which is the frame the world
+# SDF, the spawn pose and ground truth are all expressed in. The runner
+# converts them to `map` with the measured world_to_map alignment, and the
+# MAVROS driver converts them again into the autopilot's EKF-local frame using
+# the per-run world->ekf_local offset ekf_local_tf measured. run.json records
+# all three forms.
+#
+# The terminal outcome comes from the FCU's own NAV_CONTROLLER_OUTPUT.wp_dist
+# against WP_RADIUS 2.0 (ral_bringup/config/rover_ackermann.parm). wp_dist is
+# uint16 METRES, so the resolution of "arrived" on this platform is 1 m, and
+# goal_pose_error_m is reported against goal_tolerance_m + footprint radius
+# rather than against a tolerance this vehicle cannot resolve.
+#
+# `seed` seeds ral_faults' RNG. Nothing in this stack consumes the lidar, so on
+# this platform it governs a stream that is recorded as evidence and read by
+# nothing. EKF3 is not seedable.
+
+experiment_id: baseline_car
+robot: car
+world: ral_apartment
+seed: 1
+initial_pose: {x: 1.0, y: 4.0, yaw: 0.0}
+goal: {x: 6.5, y: 4.0, yaw: 0.0}
+timeout_sec: 180
+interventions: []

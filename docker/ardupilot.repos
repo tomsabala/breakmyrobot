@@ -1,0 +1,17 @@
+# The ArduPilot firmware source, built into the SITL `ardurover` binary.
+#
+# Imported into /opt/ardupilot rather than into the colcon overlay in
+# docker/overlay.repos: ArduPilot is not an ament package and builds with its
+# own waf, so a colcon workspace would scan ~200 MB of submodules on every
+# build for packages that do not exist there.
+#
+# `master` is ArduPilot's development branch and the one its SITL JSON backend
+# and the ardupilot_gazebo `ros2` branch are developed against; the release
+# branches lag the plugin's FDM protocol. The exact commit that produced the
+# binary is recorded by docker/build_overlay.sh in /opt/ardupilot/VERSION.txt
+# so a run's image_ref can be traced back to firmware source.
+repositories:
+  ardupilot:
+    type: git
+    url: https://github.com/ArduPilot/ardupilot.git
+    version: master

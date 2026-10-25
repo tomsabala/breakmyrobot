@@ -27,14 +27,25 @@ of them is a measurement (ENGINEERING.md section 8).
 
 The BAG is the source of record. run.json is consulted only for the goal's
 UUID, for the action status when the hidden action topic did not record, for
-the mission window when /mission_state did not, and for the bring-up liveness
-proof that makes `collision_count: 0` a measurement; meta says which source
-each of those came from.
+the mission window when /mission_state did not, for the measured
+world->ekf_local alignment of an estimator with its own origin, and for the
+bring-up liveness proof that makes `collision_count: 0` a measurement; meta
+says which source each of those came from.
 
-Truth arrives in the gz `world` frame and AMCL reports in `map`. Every
-comparison between them applies world_to_map from the alignment sealed to the
-map in use, through ral_eval.frames - never an implicit identity, which would
-publish a constant frame offset as localization error.
+Nothing here knows a robot by name. WHAT the estimate is, which topic carries
+it, whether the platform is commanded in velocity at all, how fast its plant
+can go and how wide its footprint is are read from the ROBOT PROFILE the run
+copied verbatim into env.json - the same discipline the alignment follows, so
+a later profile edit cannot change an old run's numbers. A metric a platform
+cannot support is a null with a reason naming why, never an absent key: an
+absent key and an unmeasurable quantity read identically.
+
+Truth arrives in the gz `world` frame; an estimate arrives in whatever frame
+its profile declares. Every comparison between them applies world_to_map from
+the alignment sealed to the map in use, through ral_eval.frames - and, for an
+estimator whose origin is its own (ArduPilot's EKF3), the per-run MEASURED
+world->ekf_local first. Never an implicit identity, which would publish a
+constant frame offset as localization error.
 
 The computations are pure functions over lists of (stamp, value) tuples so
 they can be tested without a bag or a simulator; write_metrics only wires bag
@@ -49,7 +60,7 @@ import sys
 
 from action_msgs.msg import GoalStatus
 from ral_eval.bagio import ral_stamp, read_bag, stamp_of, truth_track
-from ral_eval.frames import world_pose_to_map, wrap_to_pi
+from ral_eval.frames import map_pose_to_world, world_pose_to_map, wrap_to_pi
 from ral_interfaces.msg import FaultEvent, MissionState
 
 import yaml
@@ -67,12 +78,16 @@ import yaml
 # scripts/checks/repeatability_report.py asserts this number against its own
 # METRICS_VERSION_SUPPORTED and refuses an older run, so the bump is
 # load-bearing rather than documentation.
-METRICS_VERSION = 4
+# 5: the estimate source, the plant maximum and the footprint radius are read
+# from the run's own robot profile instead of module constants; `nav2_result`
+# became `mission_result`; `est_pos_horiz_accuracy_max_m`, `est_status_flags`
+# and `speed_vs_target` were added for platforms with no pose covariance and
+# no velocity command. A v4 reader sees a renamed key.
+METRICS_VERSION = 5
 
 STAMP_MATCH_S = 0.05        # truth<->estimate pairing window, as in the Phase 2 harness
 CMD_ZERO_EPS = 0.01         # m/s and rad/s below which a command is "stopped"
 COLLISION_DEBOUNCE_S = 0.5  # sim seconds, per colliding pair
-PLANT_MAX_LINEAR = 0.46     # model.sdf DiffDrive max_linear_velocity
 TELEPORT_FACTOR = 3.0       # a step longer than 3x the plant maximum is not travel
 TELEPORT_SLACK_M = 0.05     # absolute slack, so stamp jitter alone cannot trip it
 PLAN_RESAMPLE_M = 0.1       # plan comparison spacing
@@ -124,6 +139,16 @@ GOAL_STATUS_NAMES = {
     GoalStatus.STATUS_ABORTED: 'STATUS_ABORTED',
 }
 
+# The mission state each terminal GoalStatus corresponds to, the same mapping
+# the runner publishes with. Any other code is `unknown`: a non-terminal
+# status arriving as the last one means the mission's end was never reported,
+# and naming it `aborted` would claim a status the server never sent.
+NAV2_STATUS_STATES = {
+    GoalStatus.STATUS_SUCCEEDED: MissionState.STATE_SUCCEEDED,
+    GoalStatus.STATUS_ABORTED: MissionState.STATE_ABORTED,
+    GoalStatus.STATUS_CANCELED: MissionState.STATE_CANCELED,
+}
+
 TERMINAL_MISSION_STATES = (
     MissionState.STATE_SUCCEEDED,
     MissionState.STATE_ABORTED,
@@ -133,9 +158,13 @@ TERMINAL_MISSION_STATES = (
     MissionState.STATE_UNKNOWN,
 )
 
+# The topics whose NAMES are a property of a stack rather than of a robot:
+# every platform's truth, mission and fault streams, and the fixed topics the
+# Nav2 and MAVROS stacks each publish under. The estimate topic, the
+# uncertainty topic and the command topic are NOT here: they are per robot,
+# they come out of the run's own profile, and a constant for them is exactly
+# the hardcoding this module stopped doing in v5.
 TOPIC_TRUTH = '/ground_truth/odom'
-TOPIC_AMCL = '/amcl_pose'
-TOPIC_CMD = '/cmd_vel'
 TOPIC_PLAN = '/plan'
 TOPIC_BUMPER = '/bumper'
 TOPIC_MISSION = '/mission_state'
@@ -144,16 +173,66 @@ TOPIC_INITIALPOSE = '/initialpose'
 TOPIC_MAP = '/map'
 TOPIC_ACTION_STATUS = '/navigate_to_pose/_action/status'
 TOPIC_ACTION_FEEDBACK = '/navigate_to_pose/_action/feedback'
+TOPIC_MAVROS_STATE = '/mavros/state'
+TOPIC_MAVROS_NAV_OUTPUT = '/mavros/nav_controller_output/output'
 
 # Both halves of the lidar path: scan_degradation_divergence is the proof
 # that the degraded stream and the raw one differ only after activation.
 TOPIC_SCAN = '/scan'
 TOPIC_SCAN_RAW = '/scan_raw'
 
-READ_TOPICS = [TOPIC_TRUTH, TOPIC_AMCL, TOPIC_CMD, TOPIC_PLAN, TOPIC_BUMPER,
-               TOPIC_MISSION, TOPIC_FAULTS, TOPIC_INITIALPOSE, TOPIC_MAP,
-               TOPIC_ACTION_STATUS, TOPIC_ACTION_FEEDBACK,
-               TOPIC_SCAN, TOPIC_SCAN_RAW]
+# Read by every platform: truth, the mission vocabulary, the fault stream, the
+# two lidar halves and the contact sensor exist on any robot this project
+# integrates, because they are what an experiment is scored from.
+READ_TOPICS_COMMON = (TOPIC_TRUTH, TOPIC_MISSION, TOPIC_FAULTS,
+                      TOPIC_SCAN, TOPIC_SCAN_RAW, TOPIC_BUMPER)
+
+
+def read_topics(profile: dict) -> list:
+    """
+    Every topic this run's metrics are computed from, for ONE robot profile.
+
+    Driven entirely by the profile, so adding a platform does not edit this
+    module: the estimate and its uncertainty come from `estimate`, the
+    commanded velocity from `command` only when the platform IS commanded in
+    velocity, and the per-stack topics from `mission_driver`. A topic asked
+    for and never recorded is reported by read_bag as 'absent' and becomes a
+    null metric with a reason; a topic never asked for would instead vanish
+    silently, which is why this list is derived rather than guessed.
+
+    test_mission_vocabulary asserts, for every committed profile, that this
+    list is covered by what the runner actually records.
+    """
+    wanted = list(READ_TOPICS_COMMON)
+    if TOPIC_MAP in [entry['topic'] for entry in profile['bringup_topics']]:
+        wanted.append(TOPIC_MAP)
+    estimate = profile['estimate']
+    wanted.append(estimate['topic'])
+    uncertainty = estimate.get('uncertainty') or {}
+    if uncertainty.get('topic'):
+        wanted.append(uncertainty['topic'])
+    command = profile['command']
+    if command['kind'] == 'velocity_twist':
+        wanted.append(command['topic'])
+    driver = profile['mission_driver']
+    if driver == 'nav2':
+        # /initialpose is the start of localization_converged_sim_s, and the
+        # two action topics are the only verbatim outcome NavigateToPose has.
+        wanted += [TOPIC_INITIALPOSE, TOPIC_PLAN,
+                   TOPIC_ACTION_STATUS, TOPIC_ACTION_FEEDBACK]
+    elif driver == 'mavros_guided':
+        # mode/armed decide every terminal outcome, and wp_dist is the FCU's
+        # own distance to go.
+        wanted += [TOPIC_MAVROS_STATE, TOPIC_MAVROS_NAV_OUTPUT]
+    else:
+        raise ValueError(
+            f'robot profile {profile.get("robot")!r} declares mission_driver '
+            f'{driver!r}, which metrics.py has no topic set for. Add it here beside '
+            'the driver in ral_eval/mission_driver.py rather than letting a run be '
+            'scored from the common topics alone.')
+    # Deduplicated, order preserved: a profile may name a topic the common set
+    # already carries, and read_bag keys its status dict by name.
+    return list(dict.fromkeys(wanted))
 
 
 def metric(value, unit: str, source: str, definition: str, reason: str = None) -> dict:
@@ -226,7 +305,55 @@ def _bisect(values: list, target: float) -> int:
     return low
 
 
-def path_length(track: list) -> dict:
+def estimate_track(samples, estimate_frame, wtm, wtl) -> list:
+    """
+    Return the estimate as [(stamp, x_map, y_map)], converted once.
+
+    `wtl` is the measured world->ekf_local alignment, or None for a frame that
+    is already `map`. An ekf_local pose is composed into `world` first, then
+    into `map` by the same world_to_map every truth sample uses.
+
+    `samples` is [(stamp, msg)]. The message SHAPE comes from the profile's
+    estimate descriptor, not from inspection: PoseWithCovarianceStamped and
+    Odometry both carry the pose at msg.pose.pose, and any other type raises
+    naming the profile key rather than being guessed at - a guessed accessor
+    would publish some other message's numbers as this robot's estimate.
+
+    map_pose_to_world is the right call for the first composition even though
+    neither frame is `map`: it composes a pose expressed in a CHILD frame
+    into the parent, given the child origin's pose in the parent, which is
+    exactly what `wtl` is (world_to_ekf_local = the ekf_local origin measured
+    in `world`). Writing a second SE(2) composition here would be a second
+    place for a sign error to live.
+    """
+    out = []
+    for stamp, msg in samples:
+        type_name = str(getattr(msg, '_type', '')) or type(msg).__name__
+        if hasattr(msg, 'pose') and hasattr(msg.pose, 'pose'):
+            x = msg.pose.pose.position.x
+            y = msg.pose.pose.position.y
+        else:
+            raise ValueError(
+                f'the robot profile declares estimate.type for a message shaped like '
+                f'{type_name}, which carries no pose.pose. metrics.py reads '
+                'geometry_msgs/msg/PoseWithCovarianceStamped and nav_msgs/msg/Odometry; '
+                'add the accessor beside this check rather than guessing one.')
+        if estimate_frame == 'map':
+            out.append((stamp, x, y))
+            continue
+        if wtl is None:
+            raise ValueError(
+                f'the robot profile declares estimate.frame {estimate_frame!r}, which is '
+                'not `map`, and run.json carries no world_to_ekf_local measurement to '
+                'compose it with. Scoring the estimate as though it were already in '
+                '`map` would report the unmeasured frame offset as localization error.')
+        wx, wy, _ = map_pose_to_world(x, y, 0.0, wtl)
+        mx, my, _ = world_pose_to_map(wx, wy, 0.0, wtm)
+        out.append((stamp, mx, my))
+    return out
+
+
+def path_length(track: list, max_linear: float) -> dict:
     """
     Distance actually travelled, with teleports excluded and reported.
 
@@ -241,6 +368,11 @@ def path_length(track: list) -> dict:
     robot with distance it never drove. Note that two samples sharing a stamp
     collapse the limit to TELEPORT_SLACK_M alone, so a genuine step between
     them would be excluded; that is reported in `excluded_steps`.
+
+    `max_linear` is the plant maximum, in m/s, and has NO default: it is a
+    property of the robot, read from the run's own profile. A guessed value
+    silently re-labels real travel as a teleport on a faster platform, and
+    real teleports as travel on a slower one.
     """
     length = 0.0
     excluded = 0.0
@@ -253,7 +385,7 @@ def path_length(track: list) -> dict:
                 f'followed by {after[0]}. The caller must sort before measuring; a '
                 'negative dt would shed real travel into teleport_excluded_m.')
         step = math.hypot(after[1] - before[1], after[2] - before[2])
-        limit = TELEPORT_FACTOR * PLANT_MAX_LINEAR * dt + TELEPORT_SLACK_M
+        limit = TELEPORT_FACTOR * max_linear * dt + TELEPORT_SLACK_M
         if step > limit:
             excluded += step
             excluded_steps += 1
@@ -410,6 +542,39 @@ def moving_average(values: list, width: int = SMOOTH_SAMPLES) -> list:
                   if value is not None]
         out.append(sum(window) / len(window) if window else None)
     return out
+
+
+def achieved_velocity(track: list, t_start: float, t_end: float):
+    """
+    (grid, forward m/s, yaw rate rad/s) differentiated from truth POSE.
+
+    `track` is [(t, x, y, yaw), ...]. One implementation, three readers:
+    cmd_vs_achieved compares it against the velocity command, speed_vs_target
+    compares it against a cruise speed on a platform that has no velocity
+    command, and plot_run draws it. A second copy would let the figure and
+    metrics.json disagree about phase or sample count.
+
+    Forward speed is the body-frame projection of the xy difference on the
+    heading, so a reversing vehicle reads negative rather than fast.
+    """
+    step = 1.0 / RESAMPLE_HZ
+    count = max(3, int((t_end - t_start) / step) + 1)
+    grid = [t_start + index * step for index in range(count)]
+    truth_x = resample_linear([(s[0], s[1]) for s in track], grid)
+    truth_y = resample_linear([(s[0], s[2]) for s in track], grid)
+    truth_yaw = resample_linear(
+        list(zip([s[0] for s in track], unwrap_angles([s[3] for s in track]))), grid)
+    dx = moving_average(central_difference(truth_x, step), SMOOTH_SAMPLES)
+    dy = moving_average(central_difference(truth_y, step), SMOOTH_SAMPLES)
+    angular = moving_average(central_difference(truth_yaw, step), SMOOTH_SAMPLES)
+    linear = []
+    for index in range(count):
+        if dx[index] is None or dy[index] is None or truth_yaw[index] is None:
+            linear.append(None)
+        else:
+            linear.append(dx[index] * math.cos(truth_yaw[index])
+                          + dy[index] * math.sin(truth_yaw[index]))
+    return grid, linear, angular
 
 
 def _point_to_segment(px, py, ax, ay, bx, by) -> float:
@@ -584,6 +749,98 @@ def first_response(activated_t: float, plans: list, cmds: list, recoveries: list
     return out
 
 
+def first_response_mavros(activated_t: float, modes: list, speeds: list,
+                          horizon: float = RESPONSE_HORIZON_S) -> dict:
+    """
+    Measure the same response on a platform with no plan and no velocity command.
+
+    `modes` is [(t, mode_string), ...] from /mavros/state and `speeds` is
+    [(t, achieved_m_s), ...] - achieved forward speed differentiated from
+    SIMULATOR TRUTH. The truth speed is an EVALUATION signal, not something
+    the robot knew: ArduRover publishes no velocity command to compare
+    against, so the only thing left that a fault can be seen to change is the
+    motion itself, and the honest label for that is "what the simulator says
+    happened".
+
+    Triggers, earliest wins, all bounded to (activated_t, activated_t + horizon]:
+      mode_changed    the autopilot's own mode string differing from the one
+                      in force at activation. An EVENT, not an inference, so
+                      it keeps the floor-free comparison exactly as
+                      recovery_started does in first_response.
+      speed_changed   achieved speed moving from the speed at activation by
+                      more than max(CMD_CHANGE_FLOOR, RESPONSE_BASELINE_MARGIN
+                      x the largest pre-activation excursion). SKIPPED, not
+                      floored, when the pre-activation window holds fewer than
+                      two samples: there is no null hypothesis to test against.
+
+    ALWAYS returns a dict, so the calibration is visible even when nothing
+    fired. `trigger` is None in that case and `reason` says what was searched.
+    """
+    baseline_start = activated_t - RESPONSE_BASELINE_WINDOW_S
+    limit = activated_t + horizon
+    candidates = []
+
+    # -- mode_changed ---------------------------------------------------------
+    ordered_modes = sorted(modes, key=lambda item: item[0])
+    base_mode = None
+    for stamp, mode in ordered_modes:
+        if stamp <= activated_t:
+            base_mode = mode
+    if base_mode is not None:
+        for stamp, mode in ordered_modes:
+            if activated_t < stamp <= limit and mode != base_mode:
+                candidates.append(('mode_changed', stamp))
+                break
+
+    # -- speed_changed --------------------------------------------------------
+    ordered_speeds = sorted(speeds, key=lambda item: item[0])
+    base_speed = None
+    for stamp, speed in ordered_speeds:
+        if stamp <= activated_t:
+            base_speed = speed
+    baseline_speeds = [(stamp, speed) for stamp, speed in ordered_speeds
+                       if baseline_start <= stamp <= activated_t]
+    speed_threshold = None
+    speed_excursion = None
+    if base_speed is not None and len(baseline_speeds) >= 2:
+        speed_excursion = max(abs(abs(speed) - abs(base_speed))
+                              for _, speed in baseline_speeds)
+        speed_threshold = max(CMD_CHANGE_FLOOR,
+                              RESPONSE_BASELINE_MARGIN * speed_excursion)
+        for stamp, speed in ordered_speeds:
+            if not (activated_t < stamp <= limit):
+                continue
+            if abs(abs(speed) - abs(base_speed)) > speed_threshold:
+                candidates.append(('speed_changed', stamp))
+                break
+
+    out = {
+        'trigger': None, 'response_sim_s': None, 'delta_s': None,
+        'horizon_s': horizon,
+        'speed_threshold_m_s': speed_threshold,
+        'speed_baseline_excursion_m_s': speed_excursion,
+        'speed_baseline_samples': len(baseline_speeds),
+        'mode_at_activation': base_mode,
+        'reason': None,
+    }
+    if not candidates:
+        out['reason'] = (
+            'no autopilot mode change, '
+            + ('no achieved-speed change above '
+               f'{speed_threshold:.3f} m/s' if speed_threshold is not None else
+               'no achieved-speed change (the speed_changed trigger was skipped: '
+               f'{len(baseline_speeds)} truth speed sample(s) in the '
+               f'{RESPONSE_BASELINE_WINDOW_S:.0f} s sim pre-activation window, '
+               'fewer than the 2 needed to calibrate a threshold)')
+            + f', within {horizon:.1f} s sim of activation')
+        return out
+    trigger, stamp = min(candidates, key=lambda item: item[1])
+    out['trigger'] = trigger
+    out['response_sim_s'] = stamp
+    out['delta_s'] = stamp - activated_t
+    return out
+
+
 def point_to_box(px: float, py: float, cx: float, cy: float, yaw: float,
                  sx: float, sy: float) -> float:
     """
@@ -748,33 +1005,6 @@ def _mission_window(mission_msgs, run_json):
             'final_state': run_json.get('mission_state')}
 
 
-def _nav2_robot_radius(nav2_params_path) -> 'float | None':
-    """
-    robot_radius from the params THIS run used, or None when unreadable.
-
-    The fallback for a run.json written before the pre-flight recorded it.
-    Reads the file env.json names, never a repository copy: a later retune of
-    nav2_roomba.yaml must not change an old run's clearance number. The LARGER
-    of the two costmaps' values, matching run_scenario.read_robot_radius.
-    """
-    if not nav2_params_path:
-        return None
-    try:
-        with open(nav2_params_path) as handle:
-            doc = yaml.safe_load(handle) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    found = []
-    for section in ('global_costmap', 'local_costmap'):
-        params = (doc.get(section) or {}).get(section, {}).get('ros__parameters', {})
-        if isinstance(params, dict) and 'robot_radius' in params:
-            try:
-                found.append(float(params['robot_radius']))
-            except (TypeError, ValueError):
-                return None
-    return max(found) if found else None
-
-
 def write_metrics(run_dir: str) -> dict:
     """Compute every metric for one run directory and write metrics.json."""
     bag_dir = os.path.join(run_dir, 'bag')
@@ -806,19 +1036,54 @@ def write_metrics(run_dir: str) -> dict:
     alignment_source = (f'{os.path.basename(env["alignment_path"])} copied verbatim into '
                         'env.json')
 
-    data, status = read_bag(bag_dir, READ_TOPICS)
+    # The robot profile, read from the run's OWN env.json copy for the same
+    # reason the alignment is: what the estimate IS, how fast the plant can
+    # go and how wide the footprint is are properties of the robot that ran,
+    # and a later profile edit must not change an old run's numbers.
+    profile = yaml.safe_load(env['robot_profile'])
+    estimate_descriptor = profile['estimate']
+    command_descriptor = profile['command']
+    driver = profile['mission_driver']
+    is_nav2 = driver == 'nav2'
+    estimate_topic = estimate_descriptor['topic']
+    estimate_label = estimate_descriptor['label']
+    uncertainty = estimate_descriptor.get('uncertainty') or {}
+    uncertainty_kind = uncertainty.get('kind')
+    uncertainty_topic = uncertainty.get('topic')
+    command_topic = command_descriptor['topic']
+    is_velocity_command = command_descriptor['kind'] == 'velocity_twist'
+    plant_max_linear = float(profile['plant']['max_linear_m_s'])
+
+    # world -> ekf_local: the MEASURED pose of the estimator's own origin in
+    # the gz world frame, made per run by ekf_local_tf and recorded in
+    # run.json. None for a platform whose estimate is already in `map`;
+    # estimate_track refuses rather than assuming an identity.
+    wtl_doc = run_json.get('world_to_ekf_local')
+    wtl = None
+    if wtl_doc:
+        wtl = (float(wtl_doc['x']), float(wtl_doc['y']), float(wtl_doc['yaw']))
+
+    data, status = read_bag(bag_dir, read_topics(profile))
     missing_topics = [name for name, state in status.items() if state == 'absent']
 
+    def samples(topic):
+        """Bag samples for a topic THIS profile may not have asked for."""
+        return data.get(topic, [])
+
     truth_all = truth_track(data[TOPIC_TRUTH], wtm)
-    amcl_all = sorted(
-        ((stamp_of(msg, log_time), msg) for log_time, msg in data[TOPIC_AMCL]),
+    estimate_msgs = sorted(
+        ((stamp_of(msg, log_time), msg) for log_time, msg in samples(estimate_topic)),
         key=lambda item: item[0])
+    # [(stamp, x_map, y_map)]: converted ONCE, here, so every estimate number
+    # below is in the same frame as truth.
+    estimate_all = estimate_track(estimate_msgs, estimate_descriptor['frame'], wtm, wtl)
     # geometry_msgs/Twist has no header: /cmd_vel can only be stamped by the
     # bag log time, which the recorder takes in sim time (--use-sim-time).
-    cmd_all = [(log_time, msg.linear.x, msg.angular.z) for log_time, msg in data[TOPIC_CMD]]
+    cmd_all = [(log_time, msg.linear.x, msg.angular.z)
+               for log_time, msg in samples(command_topic)] if is_velocity_command else []
     plan_all = [(stamp_of(msg, log_time),
                  [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses])
-                for log_time, msg in data[TOPIC_PLAN]]
+                for log_time, msg in samples(TOPIC_PLAN)]
     mission_msgs = data[TOPIC_MISSION]
     fault_msgs = data[TOPIC_FAULTS]
 
@@ -855,8 +1120,9 @@ def write_metrics(run_dir: str) -> dict:
     path_source = (f'{TOPIC_TRUTH} (frame world) mapped to map by {alignment_source}')
     path_definition = (
         'sum of |delta xy| between consecutive truth samples inside the mission window, '
-        f'excluding any step longer than {TELEPORT_FACTOR}x the plant maximum '
-        f'({PLANT_MAX_LINEAR} m/s) for its own dt plus {TELEPORT_SLACK_M} m')
+        f'excluding any step longer than {TELEPORT_FACTOR}x this plant maximum '
+        f'({plant_max_linear} m/s, from the run\'s robot profile) for its own dt plus '
+        f'{TELEPORT_SLACK_M} m')
 
     if truth_missing or not have_window:
         reason = truth_missing or no_window
@@ -865,7 +1131,7 @@ def write_metrics(run_dir: str) -> dict:
             None, 'm', path_source, 'summed length of the steps path_length_m excluded',
             reason)
     else:
-        walked = path_length([(s[0], s[1], s[2]) for s in truth_window])
+        walked = path_length([(s[0], s[1], s[2]) for s in truth_window], plant_max_linear)
         metrics['path_length_m'] = metric(
             walked['length'], 'm', path_source, path_definition)
         metrics['teleport_excluded_m'] = metric(
@@ -895,27 +1161,35 @@ def write_metrics(run_dir: str) -> dict:
             'm', goal_source, goal_definition)
 
     # -- est_error_mean_m / est_error_max_m -----------------------------------
-    est_source = (f'{TOPIC_AMCL} paired with {TOPIC_TRUTH} by header stamp within '
-                  f'{STAMP_MATCH_S * 1000:.0f} ms, truth mapped to map by {alignment_source}')
-    est_definition = ('mean and max |AMCL - truth| over the mission window; each AMCL '
-                      'sample is paired with the nearest truth sample by HEADER stamp, '
-                      'and unpaired samples are dropped rather than matched further out')
-    amcl_missing = _topic_reason(TOPIC_AMCL, status, data[TOPIC_AMCL])
-    amcl_window = [(stamp, msg) for stamp, msg in amcl_all if have_window and t0 <= stamp <= t1]
+    est_source = (f'{estimate_topic} ({estimate_label}) paired with {TOPIC_TRUTH} by '
+                  f'header stamp within {STAMP_MATCH_S * 1000:.0f} ms, truth mapped to '
+                  f'map by {alignment_source}'
+                  + ('' if estimate_descriptor['frame'] == 'map' else
+                     f', and the estimate composed from {estimate_descriptor["frame"]} '
+                     'into map through the measured world_to_ekf_local in run.json'))
+    est_definition = (f'mean and max |estimate - truth| over the mission window, the '
+                      f'estimate being {estimate_label}; each estimate sample is paired '
+                      'with the nearest truth sample by HEADER stamp, and unpaired '
+                      'samples are dropped rather than matched further out')
+    estimate_missing = _topic_reason(estimate_topic, status, samples(estimate_topic))
+    estimate_window = [sample for sample in estimate_all
+                       if have_window and t0 <= sample[0] <= t1]
+    # The covariance half needs the messages, not the converted track.
+    estimate_msg_window = [(stamp, msg) for stamp, msg in estimate_msgs
+                           if have_window and t0 <= stamp <= t1]
     pairs = pair_nearest(
-        [(stamp, (msg.pose.pose.position.x, msg.pose.pose.position.y))
-         for stamp, msg in amcl_window],
+        [(sample[0], (sample[1], sample[2])) for sample in estimate_window],
         [(sample[0], (sample[1], sample[2])) for sample in truth_window])
     pair_counts = {'est_error': len(pairs)}
     if not have_window:
         reason = no_window
-    elif amcl_missing:
-        reason = amcl_missing
+    elif estimate_missing:
+        reason = estimate_missing
     elif truth_missing:
         reason = truth_missing
     elif not pairs:
-        reason = (f'no AMCL/truth pair within {STAMP_MATCH_S * 1000:.0f} ms inside the '
-                  'mission window')
+        reason = (f'no estimate/truth pair within {STAMP_MATCH_S * 1000:.0f} ms inside '
+                  'the mission window')
     else:
         reason = None
     if reason:
@@ -945,29 +1219,46 @@ def write_metrics(run_dir: str) -> dict:
     # because an in-place rotation leaves xy unchanged - and that is asserted
     # here rather than assumed, by requiring every paired truth sample to lie
     # within FLOOR_MAX_DISPLACEMENT_M of the truth position at acceptance.
+    #
+    # The whole measurement exists only for an estimator that reports a
+    # covariance AND is initialized by an operator: it is the covariance
+    # crossing that opens the window. A platform with neither reports null
+    # with that as the reason, rather than a number taken from some other
+    # instant.
+    no_initialization = (
+        f'{estimate_label} has no operator-triggered initialization to measure from: '
+        'the estimator sets its own origin at the autopilot\'s first GPS fix, nothing '
+        f'publishes {TOPIC_INITIALPOSE} on this platform, and its uncertainty kind is '
+        f'{uncertainty_kind!r} rather than a pose covariance whose crossing could open '
+        'a start-pose window')
     start_pose_source = est_source
     start_pose_definition = (
-        'mean |AMCL - truth| while the robot is at its start pose and rotating in place: '
-        f'from the first {TOPIC_AMCL} whose covariance trace is below {COVARIANCE_LIMIT} '
-        'to goal acceptance, excluding any pair whose truth position has already moved '
-        f'more than {FLOOR_MAX_DISPLACEMENT_M} m from the truth position at acceptance. '
+        'mean |estimate - truth| while the robot is at its start pose and rotating in '
+        f'place: from the first {estimate_topic} whose covariance trace is below '
+        f'{COVARIANCE_LIMIT} to goal acceptance, excluding any pair whose truth position '
+        f'has already moved more than {FLOOR_MAX_DISPLACEMENT_M} m from the truth '
+        'position at acceptance. '
         'The robot is NOT stationary in this window - AMCL publishes on filter update and '
         'its filter updates on motion, so a stopped robot publishes nothing at all; the '
         'in-place warm-up rotation leaves xy unchanged, which is what the '
         f'{FLOOR_MAX_DISPLACEMENT_M} m guard asserts. The guard is applied to the TRUTH '
         'half of each pair; within the '
         f'{STAMP_MATCH_S * 1000:.0f} ms pairing window the body can travel at most '
-        f'{PLANT_MAX_LINEAR * STAMP_MATCH_S:.3f} m, so the bound actually enforced on the '
-        f'AMCL half is {FLOOR_MAX_DISPLACEMENT_M} + {PLANT_MAX_LINEAR * STAMP_MATCH_S:.3f} '
+        f'{plant_max_linear * STAMP_MATCH_S:.3f} m, so the bound actually enforced on the '
+        f'estimate half is {FLOOR_MAX_DISPLACEMENT_M} + '
+        f'{plant_max_linear * STAMP_MATCH_S:.3f} '
         'm. It is map error plus world->map alignment error AT THAT ONE POSE, measured, '
         'and it is the scale against which in-mission estimate error should be read. It '
         'is NOT a lower bound: both terms vary across the map, so in-mission error below '
         'this value is normal.')
-    if not have_window:
+    if uncertainty_kind != 'covariance_trace':
+        metrics['est_error_at_start_pose_m'] = metric(
+            None, 'm', start_pose_source, start_pose_definition, no_initialization)
+    elif not have_window:
         metrics['est_error_at_start_pose_m'] = metric(
             None, 'm', start_pose_source, start_pose_definition, no_window)
     else:
-        converged_before = [stamp for stamp, msg in amcl_all
+        converged_before = [stamp for stamp, msg in estimate_msgs
                             if stamp <= t0
                             and (msg.pose.covariance[0] + msg.pose.covariance[7]
                                  + msg.pose.covariance[35]) < COVARIANCE_LIMIT]
@@ -975,7 +1266,7 @@ def write_metrics(run_dir: str) -> dict:
         if not converged_before:
             metrics['est_error_at_start_pose_m'] = metric(
                 None, 'm', start_pose_source, start_pose_definition,
-                f'no {TOPIC_AMCL} reached a covariance trace below {COVARIANCE_LIMIT} '
+                f'no {estimate_topic} reached a covariance trace below {COVARIANCE_LIMIT} '
                 'before goal acceptance, so there is no converged start-pose window')
         elif not truth_at_accept:
             metrics['est_error_at_start_pose_m'] = metric(
@@ -985,8 +1276,8 @@ def write_metrics(run_dir: str) -> dict:
             start_pose_begin = min(converged_before)
             anchor = truth_at_accept[-1]
             settle_pairs = pair_nearest(
-                [(stamp, (msg.pose.pose.position.x, msg.pose.pose.position.y))
-                 for stamp, msg in amcl_all if start_pose_begin <= stamp <= t0],
+                [(sample[0], (sample[1], sample[2])) for sample in estimate_all
+                 if start_pose_begin <= sample[0] <= t0],
                 [(sample[0], (sample[1], sample[2]))
                  for sample in _window(truth_all, start_pose_begin, t0)
                  if math.hypot(sample[1] - anchor[1],
@@ -995,7 +1286,7 @@ def write_metrics(run_dir: str) -> dict:
             if not settle_pairs:
                 metrics['est_error_at_start_pose_m'] = metric(
                     None, 'm', start_pose_source, start_pose_definition,
-                    f'no AMCL/truth pair in the start-pose window '
+                    f'no estimate/truth pair in the start-pose window '
                     f'[{start_pose_begin:.2f}, {t0:.2f}] s sim within '
                     f'{FLOOR_MAX_DISPLACEMENT_M} m of the start pose')
             else:
@@ -1008,45 +1299,168 @@ def write_metrics(run_dir: str) -> dict:
 
     # -- est_cov_trace_max ----------------------------------------------------
     cov_definition = 'max of covariance[0] + covariance[7] + covariance[35] in the window'
-    if not have_window:
-        metrics['est_cov_trace_max'] = metric(None, '', TOPIC_AMCL, cov_definition, no_window)
-    elif not amcl_window:
+    if uncertainty_kind != 'covariance_trace':
         metrics['est_cov_trace_max'] = metric(
-            None, '', TOPIC_AMCL, cov_definition,
-            amcl_missing or f'no {TOPIC_AMCL} message inside the mission window')
+            None, '', estimate_topic, cov_definition,
+            'ArduPilot does not send LOCAL_POSITION_NED_COV, so '
+            '/mavros/local_position/* carries no covariance. What this platform\'s '
+            'estimator CAN report about itself is its ESTIMATOR_STATUS flags, in '
+            'est_status_flags - whether they actually arrived on this run is stated '
+            'in that metric\'s own reason')
+    elif not have_window:
+        metrics['est_cov_trace_max'] = metric(
+            None, '', estimate_topic, cov_definition, no_window)
+    elif not estimate_msg_window:
+        metrics['est_cov_trace_max'] = metric(
+            None, '', estimate_topic, cov_definition,
+            estimate_missing or f'no {estimate_topic} message inside the mission window')
     else:
         metrics['est_cov_trace_max'] = metric(
             max(msg.pose.covariance[0] + msg.pose.covariance[7] + msg.pose.covariance[35]
-                for _, msg in amcl_window),
-            '', TOPIC_AMCL, cov_definition)
+                for _, msg in estimate_msg_window),
+            '', estimate_topic, cov_definition)
+
+    # -- est_pos_horiz_accuracy_max_m -----------------------------------------
+    # The counterpart for an estimator that reports a status rather than a
+    # covariance. VERIFIED, not assumed: `ros2 interface show
+    # mavros_msgs/msg/EstimatorStatus` in this image lists a header and twelve
+    # booleans - the ESTIMATOR_STATUS_FLAGS bitmask, republished flag by flag.
+    # The MAVLink ESTIMATOR_STATUS message's pos_horiz_accuracy and
+    # pos_horiz_ratio fields are NOT carried across by this version of mavros,
+    # so there is no accuracy number in the bag to take a maximum of. The
+    # metric stays, null with that as its reason, because the alternative is
+    # an absent key - and a reader cannot tell an absent key from an
+    # unmeasured one. The accessor is probed rather than hardcoded, so a mavros
+    # that does carry the fields fills this in without an edit here.
+    accuracy_source = uncertainty_topic or 'none (the profile names no uncertainty topic)'
+    accuracy_definition = (
+        f'max pos_horiz_accuracy and max pos_horiz_ratio over {accuracy_source} inside '
+        'the mission window: the estimator\'s OWN assessment of its horizontal position '
+        'accuracy, which is what a platform with no pose covariance can honestly report')
+    # The uncertainty window, computed ONCE for both metrics below. It used to
+    # be bound inside the accuracy metric's `else:` branch while the flags
+    # metric read the same names - so on a covariance platform the flags
+    # metric referred to a name that branch had never bound.
+    uncertainty_status_msgs = []
+    uncertainty_in_window = []
+    uncertainty_carried = []
+    if uncertainty_kind == 'estimator_status':
+        uncertainty_status_msgs = [(stamp_of(msg, log_time), msg)
+                                   for log_time, msg in samples(uncertainty_topic)]
+        uncertainty_in_window = [msg for stamp, msg in uncertainty_status_msgs
+                                 if have_window and t0 <= stamp <= t1]
+        uncertainty_carried = [msg for msg in uncertainty_in_window
+                               if hasattr(msg, 'pos_horiz_accuracy')
+                               and hasattr(msg, 'pos_horiz_ratio')]
+
+    if uncertainty_kind != 'estimator_status':
+        metrics['est_pos_horiz_accuracy_max_m'] = metric(
+            None, 'm', accuracy_source, accuracy_definition,
+            'nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports '
+            'est_cov_trace_max instead')
+    elif not have_window:
+        metrics['est_pos_horiz_accuracy_max_m'] = metric(
+            None, 'm', accuracy_source, accuracy_definition, no_window)
+    elif not uncertainty_in_window:
+        metrics['est_pos_horiz_accuracy_max_m'] = metric(
+            None, 'm', accuracy_source, accuracy_definition,
+            _topic_reason(uncertainty_topic, status, samples(uncertainty_topic))
+            or f'no {uncertainty_topic} message inside the mission window')
+    elif not uncertainty_carried:
+        metrics['est_pos_horiz_accuracy_max_m'] = metric(
+            None, 'm', accuracy_source, accuracy_definition,
+            f'{uncertainty_topic} carries '
+            f'{type(uncertainty_in_window[0]).__module__.split(".")[0]}'
+            f'/{type(uncertainty_in_window[0]).__name__}, which has no '
+            'pos_horiz_accuracy and no pos_horiz_ratio field: mavros republishes '
+            'ESTIMATOR_STATUS as its flag bits only (verified with `ros2 interface '
+            'show mavros_msgs/msg/EstimatorStatus`), so the accuracy numbers MAVLink '
+            f'defines never reach the bag. {len(uncertainty_in_window)} status '
+            'message(s) were recorded inside the window and their flags are in the '
+            'bag; this platform therefore publishes NO numeric pose uncertainty at all')
+    else:
+        metrics['est_pos_horiz_accuracy_max_m'] = metric(
+            {'pos_horiz_accuracy_m': max(float(msg.pos_horiz_accuracy)
+                                         for msg in uncertainty_carried),
+             'pos_horiz_ratio_max': max(float(msg.pos_horiz_ratio)
+                                        for msg in uncertainty_carried),
+             'samples': len(uncertainty_carried)},
+            'm', accuracy_source, accuracy_definition)
+
+    # -- est_status_flags -----------------------------------------------------
+    # The EKF's own health flags, summarised as the fraction of in-window
+    # messages in which each was true: the estimator's assessment of itself,
+    # published by the robot and never simulator truth. pos_horiz_abs and
+    # gps_glitch are the two a kidnap run is read through.
+    #
+    # MEASURED on this build: it does not arrive. The launch file's MAVLink2
+    # SET_MESSAGE_INTERVAL request for ESTIMATOR_STATUS is answered
+    # success=False by this ArduRover (visible in every car launch.log), so
+    # /mavros/estimator_status is recorded and EMPTY and all three uncertainty
+    # metrics - est_cov_trace_max, est_pos_horiz_accuracy_max_m and this one -
+    # are null. That is an absence of EVIDENCE, not an absence of a number,
+    # and each reason says so rather than pointing at a sibling metric that is
+    # also null. The truth-vs-estimate error is unaffected: it is measured
+    # from the estimate topic, which does stream.
+    flags_definition = (
+        f'fraction of {accuracy_source} messages inside the mission window in which '
+        'each ESTIMATOR_STATUS flag was true, plus the message count. The estimator\'s '
+        'OWN assessment of which of its states it considers healthy')
+    if uncertainty_kind != 'estimator_status':
+        metrics['est_status_flags'] = metric(
+            None, 'fraction', accuracy_source, flags_definition,
+            'nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports its '
+            'filter health as est_cov_trace_max instead')
+    elif not have_window:
+        metrics['est_status_flags'] = metric(
+            None, 'fraction', accuracy_source, flags_definition, no_window)
+    elif not uncertainty_in_window:
+        metrics['est_status_flags'] = metric(
+            None, 'fraction', accuracy_source, flags_definition,
+            _topic_reason(uncertainty_topic, status, samples(uncertainty_topic))
+            or f'no {uncertainty_topic} message inside the mission window')
+    else:
+        names = sorted(
+            field for field in type(uncertainty_in_window[0]).get_fields_and_field_types()
+            if field.endswith('_status_flag'))
+        metrics['est_status_flags'] = metric(
+            dict({name: sum(bool(getattr(msg, name)) for msg in uncertainty_in_window)
+                  / len(uncertainty_in_window) for name in names},
+                 samples=len(uncertainty_in_window)),
+            'fraction', accuracy_source, flags_definition)
 
     # -- localization_converged_sim_s -----------------------------------------
-    converge_source = f'{TOPIC_INITIALPOSE}, {TOPIC_AMCL}'
+    converge_source = f'{TOPIC_INITIALPOSE}, {estimate_topic}'
     converge_definition = (
-        f'first {TOPIC_AMCL} whose covariance trace is below {COVARIANCE_LIMIT}, minus '
-        f'the first {TOPIC_INITIALPOSE} stamp. AMCL updates its filter on MOTION, so the '
-        'runner rotates the robot in place while waiting; this measures that wait')
-    initialpose_missing = _topic_reason(TOPIC_INITIALPOSE, status, data[TOPIC_INITIALPOSE])
-    if initialpose_missing:
+        f'first {estimate_topic} whose covariance trace is below {COVARIANCE_LIMIT}, '
+        f'minus the first {TOPIC_INITIALPOSE} stamp. AMCL updates its filter on MOTION, '
+        'so the runner rotates the robot in place while waiting; this measures that wait')
+    if uncertainty_kind != 'covariance_trace':
         metrics['localization_converged_sim_s'] = metric(
-            None, 's (sim)', converge_source, converge_definition, initialpose_missing)
+            None, 's (sim)', converge_source, converge_definition, no_initialization)
     else:
-        start = min(stamp_of(msg, log_time)
-                    for log_time, msg in data[TOPIC_INITIALPOSE])
-        converged = [stamp for stamp, msg in amcl_all
-                     if stamp >= start
-                     and (msg.pose.covariance[0] + msg.pose.covariance[7]
-                          + msg.pose.covariance[35]) < COVARIANCE_LIMIT]
-        if not converged:
+        initialpose_missing = _topic_reason(
+            TOPIC_INITIALPOSE, status, samples(TOPIC_INITIALPOSE))
+        if initialpose_missing:
             metrics['localization_converged_sim_s'] = metric(
-                None, 's (sim)', converge_source, converge_definition,
-                amcl_missing or (
-                    f'no {TOPIC_AMCL} reached a covariance trace below '
-                    f'{COVARIANCE_LIMIT} after the initial pose; the filter never '
-                    'converged and the run says so'))
+                None, 's (sim)', converge_source, converge_definition, initialpose_missing)
         else:
-            metrics['localization_converged_sim_s'] = metric(
-                min(converged) - start, 's (sim)', converge_source, converge_definition)
+            start = min(stamp_of(msg, log_time)
+                        for log_time, msg in samples(TOPIC_INITIALPOSE))
+            converged = [stamp for stamp, msg in estimate_msgs
+                         if stamp >= start
+                         and (msg.pose.covariance[0] + msg.pose.covariance[7]
+                              + msg.pose.covariance[35]) < COVARIANCE_LIMIT]
+            if not converged:
+                metrics['localization_converged_sim_s'] = metric(
+                    None, 's (sim)', converge_source, converge_definition,
+                    estimate_missing or (
+                        f'no {estimate_topic} reached a covariance trace below '
+                        f'{COVARIANCE_LIMIT} after the initial pose; the filter never '
+                        'converged and the run says so'))
+            else:
+                metrics['localization_converged_sim_s'] = metric(
+                    min(converged) - start, 's (sim)', converge_source, converge_definition)
 
     # -- collision_count ------------------------------------------------------
     # /bumper is a gz contact sensor bridged GZ_TO_ROS, and a contact sensor
@@ -1104,10 +1518,15 @@ def write_metrics(run_dir: str) -> dict:
         f'count of {TOPIC_PLAN} messages inside the window. This is how often the '
         'behaviour tree\'s RateController (hz=1.0) published a path, NOT a count of '
         'replans: the BT republishes at 1 Hz with or without a fault')
-    plan_missing = _topic_reason(TOPIC_PLAN, status, data[TOPIC_PLAN])
-    if status.get(TOPIC_PLAN, 'absent') != 'read':
+    not_nav2_plan = (f'{TOPIC_PLAN} exists only in the Nav2 stack; this platform plans '
+                     'inside the autopilot and publishes no path')
+    if not is_nav2:
         metrics['plan_publications'] = metric(
-            None, 'count', TOPIC_PLAN, plan_definition, plan_missing)
+            None, 'count', TOPIC_PLAN, plan_definition, not_nav2_plan)
+    elif status.get(TOPIC_PLAN, 'absent') != 'read':
+        metrics['plan_publications'] = metric(
+            None, 'count', TOPIC_PLAN, plan_definition,
+            _topic_reason(TOPIC_PLAN, status, samples(TOPIC_PLAN)))
     elif not have_window:
         metrics['plan_publications'] = metric(
             None, 'count', TOPIC_PLAN, plan_definition, no_window)
@@ -1121,53 +1540,94 @@ def write_metrics(run_dir: str) -> dict:
         f'sim seconds inside the window with |linear.x| < {CMD_ZERO_EPS} and '
         f'|angular.z| < {CMD_ZERO_EPS}, zero-order hold on the bag log time (sim), the '
         'last command held to the terminal stamp')
-    cmd_missing = _topic_reason(TOPIC_CMD, status, data[TOPIC_CMD])
-    if cmd_missing:
+    not_velocity_commanded = (
+        'ArduRover is commanded by position setpoint, not velocity; its throttle output '
+        'is PWM and not a velocity command')
+    cmd_missing = (_topic_reason(command_topic, status, samples(command_topic))
+                   if is_velocity_command else None)
+    if not is_velocity_command:
         metrics['stopped_time_s'] = metric(
-            None, 's (sim)', TOPIC_CMD, stopped_definition, cmd_missing)
+            None, 's (sim)', command_topic, stopped_definition, not_velocity_commanded)
+    elif cmd_missing:
+        metrics['stopped_time_s'] = metric(
+            None, 's (sim)', command_topic, stopped_definition, cmd_missing)
     elif not have_window:
         metrics['stopped_time_s'] = metric(
-            None, 's (sim)', TOPIC_CMD, stopped_definition, no_window)
+            None, 's (sim)', command_topic, stopped_definition, no_window)
     else:
         stopped = stopped_time(cmd_all, t0, t1)
         if stopped is None:
             metrics['stopped_time_s'] = metric(
-                None, 's (sim)', TOPIC_CMD, stopped_definition,
-                f'no {TOPIC_CMD} message at or before the window start, so the command '
-                'in force at t_accept is unknown')
+                None, 's (sim)', command_topic, stopped_definition,
+                f'no {command_topic} message at or before the window start, so the '
+                'command in force at t_accept is unknown')
         else:
             metrics['stopped_time_s'] = metric(
-                stopped, 's (sim)', TOPIC_CMD, stopped_definition)
+                stopped, 's (sim)', command_topic, stopped_definition)
 
-    # -- nav2_result ----------------------------------------------------------
-    result_definition = (
+    # -- mission_result -------------------------------------------------------
+    # One key for both stacks, and the value says WHICH stack spoke. For Nav2
+    # that is the action status of this goal by UUID; for any other driver it
+    # is the terminal /mission_state the runner published, whose `outcome` the
+    # driver itself filled in from the autopilot's own telemetry. The outcome
+    # string carries its source as a prefix in either case, exactly as
+    # MissionState.msg defines the closed set.
+    nav2_result_definition = (
         'the action status of THIS goal, by UUID, as the server reported it. '
         'NavigateToPose\'s result payload is std_msgs/Empty, so the GoalStatus code is '
         'the only verbatim outcome the action offers')
+    mission_result_definition = (
+        'the terminal MissionState the runner published: its state, its source-prefixed '
+        'outcome and the topic it was read from. The driver fills the outcome in from '
+        'the autopilot\'s own telemetry - mode, armed and wp_dist - never from truth '
+        'and never from an inference about why the mission ended')
     goal_uuid = run_json.get('goal_uuid')
-    status_source = TOPIC_ACTION_STATUS
-    # Explicitly the LATEST by bag log time, not "whatever the reader yielded
-    # last": a future reader that returns stamp order could otherwise pick a
-    # mid-mission STATUS_EXECUTING and report it as the outcome.
-    status_entries = []
-    for log_time, msg in data[TOPIC_ACTION_STATUS]:
-        for entry in msg.status_list:
-            if goal_uuid and bytes(entry.goal_info.goal_id.uuid).hex() == goal_uuid:
-                status_entries.append((log_time, int(entry.status)))
-    status_value = max(status_entries)[1] if status_entries else None
-    if status_value is None:
-        status_source = 'run.json'
-        status_value = run_json.get('nav2_status_code')
-    if status_value is None:
-        metrics['nav2_result'] = metric(
-            None, '', status_source, result_definition,
-            f'no status for goal {goal_uuid} on {TOPIC_ACTION_STATUS} and none recorded '
-            'in run.json')
+    if is_nav2:
+        result_definition = nav2_result_definition
+        status_source = TOPIC_ACTION_STATUS
+        # Explicitly the LATEST by bag log time, not "whatever the reader yielded
+        # last": a future reader that returns stamp order could otherwise pick a
+        # mid-mission STATUS_EXECUTING and report it as the outcome.
+        status_entries = []
+        for log_time, msg in samples(TOPIC_ACTION_STATUS):
+            for entry in msg.status_list:
+                if goal_uuid and bytes(entry.goal_info.goal_id.uuid).hex() == goal_uuid:
+                    status_entries.append((log_time, int(entry.status)))
+        status_value = max(status_entries)[1] if status_entries else None
+        if status_value is None:
+            status_source = 'run.json'
+            status_value = run_json.get('nav2_status_code')
+        if status_value is None:
+            metrics['mission_result'] = metric(
+                None, '', status_source, result_definition,
+                f'no status for goal {goal_uuid} on {TOPIC_ACTION_STATUS} and none '
+                'recorded in run.json')
+        else:
+            name = GOAL_STATUS_NAMES.get(status_value, f'unknown:status_{status_value}')
+            metrics['mission_result'] = metric(
+                {'state': NAV2_STATUS_STATES.get(status_value,
+                                                 MissionState.STATE_UNKNOWN),
+                 'outcome': f'nav2:{name}',
+                 'source': status_source},
+                '', status_source, result_definition)
     else:
-        metrics['nav2_result'] = metric(
-            {'code': status_value,
-             'name': GOAL_STATUS_NAMES.get(status_value, f'unknown:status_{status_value}')},
-            '', status_source, result_definition)
+        result_definition = mission_result_definition
+        status_source = TOPIC_MISSION
+        terminal_msg = next((msg for _, msg in mission_msgs
+                             if msg.state in TERMINAL_MISSION_STATES), None)
+        if terminal_msg is None:
+            metrics['mission_result'] = metric(
+                None, '', status_source, result_definition,
+                f'no terminal state on {TOPIC_MISSION} in the bag; run.json records '
+                f'state {run_json.get("mission_state")!r} and outcome '
+                f'{run_json.get("outcome")!r}, which is the runner\'s own copy rather '
+                'than a recorded message')
+        else:
+            metrics['mission_result'] = metric(
+                {'state': terminal_msg.state,
+                 'outcome': terminal_msg.outcome,
+                 'source': TOPIC_MISSION},
+                '', status_source, result_definition)
 
     # -- recoveries -----------------------------------------------------------
     recovery_definition = (
@@ -1175,10 +1635,15 @@ def write_metrics(run_dir: str) -> dict:
         'Nav2\'s own count of behaviour-tree recovery executions, never inferred from '
         '/plan or /cmd_vel')
     feedback_samples = [(stamp_of(msg.feedback, log_time), msg.feedback)
-                        for log_time, msg in data[TOPIC_ACTION_FEEDBACK]]
+                        for log_time, msg in samples(TOPIC_ACTION_FEEDBACK)]
     feedback_missing = _topic_reason(
-        TOPIC_ACTION_FEEDBACK, status, data[TOPIC_ACTION_FEEDBACK])
-    if status.get(TOPIC_ACTION_FEEDBACK, 'absent') == 'absent':
+        TOPIC_ACTION_FEEDBACK, status, samples(TOPIC_ACTION_FEEDBACK))
+    if not is_nav2:
+        metrics['recoveries'] = metric(
+            None, 'count', TOPIC_ACTION_FEEDBACK, recovery_definition,
+            f'{TOPIC_ACTION_FEEDBACK} exists only in the Nav2 stack; this platform plans '
+            'inside the autopilot and publishes no path')
+    elif status.get(TOPIC_ACTION_FEEDBACK, 'absent') == 'absent':
         metrics['recoveries'] = metric(
             None, 'count', TOPIC_ACTION_FEEDBACK, recovery_definition,
             f'{TOPIC_ACTION_FEEDBACK} is not in the bag (the hidden action topic did not '
@@ -1201,7 +1666,8 @@ def write_metrics(run_dir: str) -> dict:
                 max(counts), 'count', TOPIC_ACTION_FEEDBACK, recovery_definition)
 
     # -- cmd_vs_achieved ------------------------------------------------------
-    achieved_source = f'{TOPIC_CMD} (zero-order hold) and {TOPIC_TRUTH} (differentiated)'
+    achieved_source = (f'{command_topic} (zero-order hold) and {TOPIC_TRUTH} '
+                       '(differentiated)')
     achieved_definition = (
         f'commanded and achieved velocity resampled onto a {RESAMPLE_HZ} Hz grid over the '
         'window and compared sample by sample. Achieved velocity is a central difference '
@@ -1214,37 +1680,25 @@ def write_metrics(run_dir: str) -> dict:
         'the recorder and the truth series by the publisher; the measured offset between '
         'the two bases in this stack is under 35 ms, against a '
         f'{1000.0 / RESAMPLE_HZ:.0f} ms grid step')
-    if not have_window:
+    if not is_velocity_command:
+        metrics['cmd_vs_achieved'] = metric(
+            None, 'm/s and rad/s', achieved_source, achieved_definition,
+            not_velocity_commanded)
+    elif not have_window:
         metrics['cmd_vs_achieved'] = metric(
             None, 'm/s and rad/s', achieved_source, achieved_definition, no_window)
     elif not cmd_all or len(truth_window) < 3:
         metrics['cmd_vs_achieved'] = metric(
             None, 'm/s and rad/s', achieved_source, achieved_definition,
             cmd_missing or truth_missing or (
-                f'{TOPIC_CMD} has {len(cmd_all)} message(s) and truth has '
+                f'{command_topic} has {len(cmd_all)} message(s) and truth has '
                 f'{len(truth_window)} sample(s) in the window; at least 3 truth samples '
                 'are needed for a central difference'))
     else:
-        step = 1.0 / RESAMPLE_HZ
-        count = max(3, int((t1 - t0) / step) + 1)
-        grid = [t0 + index * step for index in range(count)]
+        grid, achieved_linear, achieved_angular = achieved_velocity(truth_window, t0, t1)
+        count = len(grid)
         cmd_linear = resample_zoh([(s[0], s[1]) for s in cmd_all], grid)
         cmd_angular = resample_zoh([(s[0], s[2]) for s in cmd_all], grid)
-        truth_x = resample_linear([(s[0], s[1]) for s in truth_window], grid)
-        truth_y = resample_linear([(s[0], s[2]) for s in truth_window], grid)
-        truth_yaw = resample_linear(
-            list(zip([s[0] for s in truth_window],
-                     unwrap_angles([s[3] for s in truth_window]))), grid)
-        dx = moving_average(central_difference(truth_x, step))
-        dy = moving_average(central_difference(truth_y, step))
-        achieved_angular = moving_average(central_difference(truth_yaw, step))
-        achieved_linear = []
-        for index in range(count):
-            if dx[index] is None or dy[index] is None or truth_yaw[index] is None:
-                achieved_linear.append(None)
-            else:
-                achieved_linear.append(dx[index] * math.cos(truth_yaw[index])
-                                       + dy[index] * math.sin(truth_yaw[index]))
         linear_errors = [abs(cmd_linear[index] - achieved_linear[index])
                          for index in range(count)
                          if cmd_linear[index] is not None
@@ -1268,9 +1722,91 @@ def write_metrics(run_dir: str) -> dict:
                  'samples': len(linear_errors)},
                 'm/s and rad/s', achieved_source, achieved_definition)
 
+    # -- speed_vs_target ------------------------------------------------------
+    # The mobility-fault evidence for a platform that publishes no velocity
+    # command: there is nothing to compare the motion against except the speed
+    # the autopilot was CONFIGURED to cruise at, and the motion itself. The
+    # achieved half is simulator TRUTH, differentiated - an EVALUATION signal,
+    # not something the robot knew, and that is said in the definition because
+    # a reader must not take `deficit_fraction` for the vehicle's own estimate
+    # of how slow it is.
+    target_source = (f'{TOPIC_TRUTH} (differentiated) against the robot profile\'s '
+                     'plant.max_linear_m_s')
+    target_definition = (
+        f'achieved forward speed on the same {RESAMPLE_HZ} Hz grid cmd_vs_achieved uses, '
+        f'against {plant_max_linear} m/s - the cruise speed this platform is configured '
+        'with (CRUISE_SPEED/WP_SPEED, recorded in the profile as plant.max_linear_m_s). '
+        'deficit_fraction is 1 - mean_achieved / target, clamped at 0, so a vehicle at '
+        'its configured speed reads 0 and a halted one reads 1. after_activation repeats '
+        'the measurement from the first mobility_fault that reached state=activated to '
+        'the end of the window, which is the number a mobility fault is read from. '
+        'ACHIEVED SPEED IS SIMULATOR TRUTH, used here as an evaluation signal: the robot '
+        'neither measured nor reported it, and no claim is made that it knew it was slow')
+    if is_velocity_command:
+        metrics['speed_vs_target'] = metric(
+            None, 'm/s and fraction', target_source, target_definition,
+            f'this platform IS commanded in velocity on {command_topic}; its '
+            'speed is scored against that command by cmd_vs_achieved rather than '
+            'against a configured cruise speed')
+    elif not have_window:
+        metrics['speed_vs_target'] = metric(
+            None, 'm/s and fraction', target_source, target_definition, no_window)
+    elif len(truth_window) < 3:
+        metrics['speed_vs_target'] = metric(
+            None, 'm/s and fraction', target_source, target_definition,
+            truth_missing or (f'truth has {len(truth_window)} sample(s) in the window; '
+                              'at least 3 are needed for a central difference'))
+    else:
+        grid, speeds, _ = achieved_velocity(truth_window, t0, t1)
+        speed_track = [(stamp, value) for stamp, value in zip(grid, speeds)
+                       if value is not None]
+        mobility_activation = next(
+            (ral_stamp(msg) for _, msg in fault_msgs
+             if msg.kind == FaultEvent.KIND_MOBILITY_FAULT
+             and msg.state == FaultEvent.STATE_ACTIVATED), None)
+
+        def _summary(series):
+            mean = sum(value for _, value in series) / len(series)
+            deficit = max(0.0, 1.0 - mean / plant_max_linear) if plant_max_linear else None
+            return mean, deficit, len(series)
+
+        if not speed_track:
+            metrics['speed_vs_target'] = metric(
+                None, 'm/s and fraction', target_source, target_definition,
+                'no grid sample had a differentiable truth pose')
+        else:
+            mean_all, deficit_all, samples_all = _summary(speed_track)
+            value = {'target_m_s': plant_max_linear,
+                     'mean_achieved_m_s': mean_all,
+                     'deficit_fraction': deficit_all,
+                     'samples': samples_all}
+            if mobility_activation is None:
+                value['after_activation'] = None
+            else:
+                after = [(stamp, speed) for stamp, speed in speed_track
+                         if stamp >= mobility_activation]
+                if not after:
+                    value['after_activation'] = None
+                else:
+                    mean_after, deficit_after, samples_after = _summary(after)
+                    value['after_activation'] = {
+                        'activated_sim_s': mobility_activation,
+                        'mean_achieved_m_s': mean_after,
+                        'deficit_fraction': deficit_after,
+                        'samples': samples_after}
+            metrics['speed_vs_target'] = metric(
+                value, 'm/s and fraction', target_source, target_definition)
+
     # -- fault_to_response_s --------------------------------------------------
-    response_source = f'{TOPIC_FAULTS}, {TOPIC_PLAN}, {TOPIC_CMD}, {TOPIC_ACTION_FEEDBACK}'
-    response_definition = (
+    # The triggers are chosen by the DRIVER, because what counts as a material
+    # change is a property of the stack: Nav2 publishes a plan, a velocity
+    # command and its own recovery count, and ArduRover publishes none of the
+    # three. The discipline is the same on both - every threshold calibrated
+    # against this run's own pre-activation window, every search bounded to a
+    # horizon, every event trigger left floor-free.
+    nav2_response_source = (f'{TOPIC_FAULTS}, {TOPIC_PLAN}, {command_topic}, '
+                            f'{TOPIC_ACTION_FEEDBACK}')
+    nav2_response_definition = (
         'per FaultEvent that reached state=activated: the first MATERIAL change after it. '
         f'plan_diverged = a {TOPIC_PLAN} leaving the last pre-activation plan by more than '
         f'max({PLAN_DIVERGENCE_FLOOR} m, {RESPONSE_BASELINE_MARGIN}x the largest '
@@ -1286,6 +1822,25 @@ def write_metrics(run_dir: str) -> dict:
         'fired cmd_changed on 3 of 38, 5 of 38, 3 of 39 and 3 of 38 instants, and '
         'plan_diverged on none of them: a single reported response is weak evidence on '
         'its own and must be read beside a control run')
+    mavros_response_source = (f'{TOPIC_FAULTS}, {TOPIC_MAVROS_STATE}, {TOPIC_TRUTH} '
+                              '(differentiated)')
+    mavros_response_definition = (
+        'per FaultEvent that reached state=activated: the first MATERIAL change after it, '
+        'on a platform with no plan topic, no velocity command and no recovery count. '
+        f'mode_changed = the autopilot\'s own {TOPIC_MAVROS_STATE}.mode differing from '
+        'the mode in force at activation - an EVENT, so it keeps the floor-free '
+        'comparison; speed_changed = achieved forward speed moving by more than '
+        f'max({CMD_CHANGE_FLOOR} m/s, {RESPONSE_BASELINE_MARGIN}x the largest '
+        'pre-activation excursion), skipped entirely when fewer than two speed samples '
+        'precede the activation. Earliest wins, and the trigger is recorded. The search '
+        f'is bounded to {RESPONSE_HORIZON_S:.0f} s sim after activation and the '
+        f'threshold calibrated on the {RESPONSE_BASELINE_WINDOW_S:.0f} s sim window '
+        'before it. ACHIEVED SPEED IS SIMULATOR TRUTH, used as an evaluation signal: the '
+        'autopilot published no velocity of its own to compare against, and no claim is '
+        'made that the vehicle detected the change')
+    response_source = nav2_response_source if is_nav2 else mavros_response_source
+    response_definition = (nav2_response_definition if is_nav2
+                           else mavros_response_definition)
     activations = [(ral_stamp(msg), msg) for _, msg in fault_msgs
                    if msg.state == FaultEvent.STATE_ACTIVATED]
     if not activations:
@@ -1294,7 +1849,7 @@ def write_metrics(run_dir: str) -> dict:
             None, 'list of s (sim)', response_source, response_definition,
             reason=f'no FaultEvent reached state=activated; states seen: '
                    f'{states or "none"}')
-    else:
+    elif is_nav2:
         recovery_series = [(stamp, int(feedback.number_of_recoveries))
                            for stamp, feedback in feedback_samples]
         entries = []
@@ -1316,6 +1871,38 @@ def write_metrics(run_dir: str) -> dict:
             })
         metrics['fault_to_response_s'] = metric(
             entries, 'list of s (sim)', response_source, response_definition)
+    else:
+        # The mode series is the autopilot's own, and the speed series is the
+        # same differentiated truth speed_vs_target reports - over the WHOLE
+        # truth track, not the mission window, because an activation may
+        # precede the window's end by less than the baseline window.
+        modes = sorted((stamp_of(msg, log_time), str(msg.mode))
+                       for log_time, msg in samples(TOPIC_MAVROS_STATE))
+        if len(truth_all) >= 3:
+            speed_grid, speed_values, _ = achieved_velocity(
+                truth_all, truth_all[0][0], truth_all[-1][0])
+            speed_series = [(stamp, value)
+                            for stamp, value in zip(speed_grid, speed_values)
+                            if value is not None]
+        else:
+            speed_series = []
+        entries = []
+        for stamp, msg in activations:
+            found = first_response_mavros(stamp, modes, speed_series)
+            entries.append({
+                'id': msg.id, 'kind': msg.kind, 'activated_sim_s': stamp,
+                'response_sim_s': found['response_sim_s'],
+                'delta_s': found['delta_s'],
+                'trigger': found['trigger'],
+                'horizon_s': found['horizon_s'],
+                'speed_threshold_m_s': found['speed_threshold_m_s'],
+                'speed_baseline_excursion_m_s': found['speed_baseline_excursion_m_s'],
+                'speed_baseline_samples': found['speed_baseline_samples'],
+                'mode_at_activation': found['mode_at_activation'],
+                'reason': found['reason'],
+            })
+        metrics['fault_to_response_s'] = metric(
+            entries, 'list of s (sim)', response_source, response_definition)
 
     # -- obstacle_min_clearance_m ---------------------------------------------
     clearance_source = (f'{TOPIC_TRUTH} mapped to map by {alignment_source}, against '
@@ -1323,17 +1910,21 @@ def write_metrics(run_dir: str) -> dict:
                         'converted the same way')
     clearance_definition = (
         'smallest (distance from the truth position to the surface of an applied '
-        'spawned obstacle, minus the footprint radius the costmaps used) over the '
-        'interval each obstacle EXISTED - from its activated FaultEvent to its '
+        'spawned obstacle, minus the footprint radius this robot is scored with) over '
+        'the interval each obstacle EXISTED - from its activated FaultEvent to its '
         'cleared one, or to the end of the mission window. The obstacle is treated '
         'as the oriented rectangle it was spawned as; the footprint as a circle of '
-        'robot_radius. A negative value is penetration')
+        'the radius run.json\'s pre-flight recorded, falling back to the run\'s robot '
+        'profile footprint.radius_m. A negative value is penetration')
+    radius_source = 'run.json preflight.robot_radius_m'
     radius = (run_json.get('preflight') or {}).get('robot_radius_m')
     if radius is None:
-        # The same parameter, read from the file this run used, exactly as
-        # plot_run reads xy_goal_tolerance: a radius guessed here would turn
-        # "zero penetration" into an unverifiable claim.
-        radius = _nav2_robot_radius(env.get('nav2_params_path'))
+        # The robot's own profile, copied into env.json by the run: a radius
+        # guessed here would turn "zero penetration" into an unverifiable
+        # claim, and the profile is the same number the pre-flight used.
+        radius = (profile.get('footprint') or {}).get('radius_m')
+        radius_source = 'the run\'s robot profile footprint.radius_m'
+    radius = None if radius is None else float(radius)
     applied_boxes = []
     for entry in run_json.get('interventions', []):
         if entry.get('type') != 'spawn_obstacle' or entry.get('result') != 'applied':
@@ -1372,7 +1963,7 @@ def write_metrics(run_dir: str) -> dict:
         metrics['obstacle_min_clearance_m'] = metric(
             None, 'm', clearance_source, clearance_definition,
             'no robot_radius available: run.json has no preflight.robot_radius_m and '
-            f'{env.get("nav2_params_path")!r} could not be read for one')
+            'the robot profile copied into env.json carries no footprint.radius_m')
     else:
         for box in applied_boxes:
             if box['t_end'] is None:
@@ -1385,7 +1976,8 @@ def write_metrics(run_dir: str) -> dict:
         else:
             metrics['obstacle_min_clearance_m'] = metric(
                 {'value': clearance['value'], 'per_obstacle': clearance['per_obstacle'],
-                 'samples': clearance['samples'], 'robot_radius_m': radius},
+                 'samples': clearance['samples'], 'robot_radius_m': radius,
+                 'robot_radius_source': radius_source},
                 'm', clearance_source, clearance_definition)
 
     # -- scan_degradation_divergence ------------------------------------------
@@ -1434,10 +2026,21 @@ def write_metrics(run_dir: str) -> dict:
             'scenario': {'world': scenario.get('world'), 'robot': scenario.get('robot'),
                          'seed': scenario.get('seed')},
             'mission_window': window,
+            'robot': profile['robot'],
+            'robot_profile_path': env.get('robot_profile_path'),
+            # The whole descriptor, not a summary: a reader of metrics.json
+            # must be able to see WHAT the estimate was without the profile
+            # file beside them.
+            'estimate_source': estimate_descriptor,
+            'mission_driver': driver,
             'world_to_map': {'x': wtm[0], 'y': wtm[1], 'yaw': wtm[2]},
             'world_to_map_source': env['alignment_path'],
+            # The MEASURED pose of the estimator's own origin in `world`, as
+            # ekf_local_tf published it; None for a platform that estimates
+            # in `map` directly.
+            'world_to_ekf_local': wtl_doc,
             'map_sha256': env.get('map_sha256'),
-            'nav2_result_source': status_source,
+            'mission_result_source': status_source,
             'pair_counts': pair_counts,
             'missing_topics': missing_topics,
             'topic_status': status,

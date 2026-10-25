@@ -2,7 +2,7 @@
 """
 End-to-end proof of the Roomba platform and its teleop closed loop.
 
-Brings the whole stack up with `ros2 launch ral_bringup roomba_sim.launch.py`,
+Brings the whole stack up with `ros2 launch ral_bringup robot_sim.launch.py`,
 drives the robot from ROS, and asserts nine properties against the real
 simulated subsystems. Writes docs/roomba-teleop-loop.md and exits non-zero if
 any check fails.
@@ -41,14 +41,16 @@ import argparse
 import math
 import os
 import re
-import signal
-import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from xml.etree import ElementTree
 
 from ament_index_python.packages import get_package_share_directory
+# Launching, tearing down and measuring the real-time factor are the same
+# operations the two nav harnesses perform, with the same SIGINT-then-SIGKILL
+# grace: one implementation in common.py rather than three that can drift.
+from common import launch_stack, measure_rtf, teardown
 import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -235,20 +237,6 @@ def twist(linear_x: float = 0.0, angular_z: float = 0.0) -> Twist:
     return msg
 
 
-def measure_rtf() -> str:
-    """Read the real-time factor gz reports for this world."""
-    try:
-        out = subprocess.run(
-            ['gz', 'topic', '-e', '-t', f'/world/{WORLD}/stats', '-n', '3'],
-            capture_output=True, text=True, timeout=30).stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        return f'unavailable ({type(exc).__name__})'
-    values = re.findall(r'real_time_factor:\s*([0-9.]+)', out)
-    if not values:
-        return 'unavailable (no real_time_factor in /world stats)'
-    return ', '.join(values)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--image-ref', default='unknown',
@@ -266,10 +254,9 @@ def main() -> int:
     rclpy.init()
     node = Phase1Check()
 
-    with open(log_path, 'w') as log:
-        launch = subprocess.Popen(
-            ['ros2', 'launch', 'ral_bringup', 'roomba_sim.launch.py'],
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    launch, launch_log = launch_stack('robot_sim.launch.py', log_path,
+                                      ('robot:=roomba',))
+    with launch_log:
 
         sim_start = None
         rtf = 'not measured'
@@ -284,7 +271,10 @@ def main() -> int:
                 '/joint_states': lambda: node.joints is not None,
             }
             deadline = time.monotonic() + 60.0
-            missing = None
+            # The full gated list, NOT None: a zero-iteration loop would
+            # otherwise leave `missing` falsy and record a PASS nobody
+            # observed.
+            missing = list(needed)
             while time.monotonic() < deadline:
                 node.spin_wall(0.5)
                 missing = [t for t, ready in needed.items() if not ready()]
@@ -472,7 +462,7 @@ def main() -> int:
                    + ', '.join(f'{name} turned {turned.get(name, float("nan")):.1f} rad'
                                for name in wheel_names))
 
-            rtf = measure_rtf()
+            rtf = measure_rtf(WORLD)
 
         except SystemExit:
             # A bring-up failure already recorded itself; fall through so the
@@ -482,24 +472,21 @@ def main() -> int:
             sim_end = node.sim_now()
             node.destroy_node()
             rclpy.shutdown()
-            try:
-                os.killpg(os.getpgid(launch.pid), signal.SIGINT)
-                launch.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(launch.pid), signal.SIGKILL)
-                launch.wait(timeout=10)
-            except ProcessLookupError:
-                pass
+            teardown(launch)
 
     sim_duration = (sim_end - sim_start) if sim_start is not None else 0.0
-    passed = all(result[2] for result in results)
+    # The count matters as much as the verdicts: a run that recorded only
+    # three checks and passed all three is not a pass. 10 is the number of
+    # distinct check numbers this file records (0 through 9), the same guard
+    # both nav harnesses carry.
+    passed = all(result[2] for result in results) and len(results) == 10
 
     doc = [
         '# Roomba platform and teleop closed loop — measured proof',
         '',
         f'Measured {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")} by',
         '`scripts/checks/roomba_teleop_check.sh`, which launches',
-        '`ral_bringup/roomba_sim.launch.py` and drives the robot from ROS. Every',
+        '`ral_bringup/robot_sim.launch.py` and drives the robot from ROS. Every',
         'duration is sim time off `/clock`. This is the MVP plan\'s Phase 1 scope:',
         'the robot, the world, the bridge and the teleop loop, with no map,',
         'localization, planner or fault injection yet.',
@@ -550,10 +537,12 @@ def main() -> int:
         '',
         '## Known plant properties and limits',
         '',
-        '- `DiffDrive` has no command timeout: the last `/cmd_vel` is held',
-        '  indefinitely. A Phase 4 communication fault therefore produces a',
-        '  robot that keeps driving on its last command, not one that stops.',
-        '  That is the modelled behavior, and no watchdog exists to change it.',
+        '- `DiffDrive` has no command timeout ON THIS PLATFORM: the last',
+        '  `/cmd_vel` is held indefinitely. A Phase 4 communication fault',
+        '  therefore produces a robot that keeps driving on its last command,',
+        '  not one that stops. That is the modelled behavior, and no watchdog',
+        '  exists to change it. The car is different: ArduRover carries its own',
+        '  failsafes and stops a guided vehicle after 3 s without a setpoint.',
         '- `/ground_truth/odom.twist` is a finite difference of truth poses, not',
         '  a simulator-reported velocity: forward and lateral components are',
         '  resolved on the previous heading, and a sample with no valid',
@@ -567,7 +556,8 @@ def main() -> int:
         'This harness runs the bare platform: no map, localization, planner or',
         'controller is started here, and no fault is injected here. Both exist',
         'now and are exercised elsewhere - the navigation stack by',
-        '`scripts/checks/roomba_nav_check.py`, the five faults by the',
+        '`scripts/checks/roomba_nav_check.py`, the five faults this platform',
+        'supports by the',
         '`ral_eval` scenario runs under `runs/`. Nothing in this stack consumes',
         '`/imu` or `/joint_states`: check 9 reads them directly, and no state',
         'estimator fuses them.',

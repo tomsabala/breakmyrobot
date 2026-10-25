@@ -17,7 +17,8 @@
 Report the measured spread of N identical runs. Never assert determinism.
 
 Reads the N newest runs/<experiment_id>_* directories, takes their
-metrics.json and env.json verbatim, and writes docs/repeatability.md: a
+metrics.json and env.json verbatim, and writes
+docs/repeatability-<experiment_id>.md: a
 per-run table, a spread row for the two metrics the MVP plan names, the
 provenance of each run, and a section stating exactly what the numbers do and
 do not show.
@@ -52,9 +53,10 @@ EXIT_TOO_FEW_RUNS = 2
 # run that does not carry it. A v3 file, for instance, has no
 # scan_degradation_divergence.pairs_unmatched at all, and an absent key is
 # indistinguishable from a measured zero.
-METRICS_VERSION_SUPPORTED = 4
+METRICS_VERSION_SUPPORTED = 5
 
-# The metrics reported per run. `nav2_result` is rendered from its {code, name}.
+# The metrics reported per run. `mission_result` is rendered from its
+# {state, outcome, source}.
 PER_RUN_METRICS = ('mission_duration_s', 'path_length_m', 'goal_pose_error_m',
                    'est_error_mean_m', 'est_error_at_start_pose_m',
                    'plan_publications', 'recoveries', 'collision_count')
@@ -68,8 +70,10 @@ def _format(value) -> str:
         return '`null`'
     if isinstance(value, float):
         return f'{value:.3f}'
-    if isinstance(value, dict) and 'name' in value:
-        return f'`{value["name"]}`'
+    # mission_result's {state, outcome, source}: the outcome is the verbatim
+    # source-prefixed string, which is the whole point of the key.
+    if isinstance(value, dict) and 'outcome' in value:
+        return f'`{value["outcome"]}`'
     return str(value)
 
 
@@ -197,7 +201,7 @@ def main() -> int:
 
     for name in PER_RUN_METRICS:
         doc.append(f'| `{name}` | ' + ' | '.join(render(name)) + ' |')
-    doc.append('| `nav2_result` | ' + ' | '.join(render('nav2_result')) + ' |')
+    doc.append('| `mission_result` | ' + ' | '.join(render('mission_result')) + ' |')
     doc.append('| `fault_to_response_s` | ' + ' | '.join(render('fault_to_response_s'))
                + ' |')
 
@@ -225,13 +229,85 @@ def main() -> int:
             '| --- | --- | --- | --- | --- | --- | --- |']
     for run in runs:
         env = run['env']
-        wtm = run['metrics']['meta']['world_to_map']
+        # .get, because a run whose meta carries no alignment must still be
+        # reported rather than raise in the middle of writing the table.
+        wtm = run['metrics']['meta'].get('world_to_map')
         doc.append(
             f'| `{run["name"]}` | `{str(env.get("image_ref", "unknown"))[:24]}` | '
             f'`{str(env.get("git_sha", "unknown"))[:12]}` | {env.get("git_dirty")} | '
             f'`{str(env.get("map_sha256"))[:16]}` | '
-            f'x = {wtm["x"]}, y = {wtm["y"]}, yaw = {wtm["yaw"]} | '
+            + ('—' if wtm is None else
+               f'x = {wtm["x"]}, y = {wtm["y"]}, yaw = {wtm["yaw"]}') + ' | '
             f'{run["run"].get("rtf_samples", "not measured")} |')
+
+    # The bullets below are split in two. The shared ones are true of any
+    # platform this harness repeats; the per-driver ones are about the stack
+    # that actually ran, read from the runs' own `mission_driver`. Emitting
+    # the Nav2 prose for a MAVROS run attributed the car's est_error_* to
+    # nav2_amcl's particle filter and a 20 Hz DWB loop, neither of which
+    # existed in the run being described.
+    drivers = {run['run'].get('mission_driver') for run in runs}
+    if len(drivers) != 1:
+        raise SystemExit(
+            f'the runs disagree about mission_driver ({sorted(map(str, drivers))}); '
+            'a single report cannot describe two stacks, and guessing one would '
+            'attribute a platform\'s spread to a stack that did not run it')
+    driver = drivers.pop()
+    if driver == 'nav2':
+        driver_bullets = [
+            '- **`nav2_amcl` exposes no seed.** Its particle filter draws from `drand48`,',
+            '  seeded outside our control, so the estimate differs run to run even with',
+            '  identical sensor input. Every `est_error_*` number inherits that.',
+            '- **ROS callback scheduling and the 20 Hz DWB loop are not deterministic.**',
+            '  Control decisions land on slightly different sim instants each run, which',
+            '  shows up directly in `mission_duration_s` and `path_length_m`.',
+            '- **The start HEADING is aligned before the goal is sent, and it dominates**',
+            '  **everything else.** The localization warm-up is an in-place rotation, so it',
+            '  ends wherever convergence happened to land. With that arbitrary heading the',
+            '  measured spread of `mission_duration_s` over three runs was **12.5%** (71.0 to',
+            '  80.5 s): facing away from the goal, DWB reversed at 0.1 m/s for 40 s instead',
+            '  of turning. The runner now turns back to the scenario\'s declared initial yaw',
+            '  first, using `/amcl_pose` — the robot\'s own estimate, never ground truth —',
+            '  and `run.json` records `initial_yaw_aligned` and the residual AMCL believed',
+            '  it had. The reversing run was real Nav2 behaviour, but it answered a heading',
+            '  no scenario asked for.',
+        ]
+    elif driver == 'mavros_guided':
+        driver_bullets = [
+            '- **ArduPilot\'s EKF3 is not seedable.** The autopilot fuses its simulated',
+            '  IMU and GPS inside the firmware, and neither that fusion nor SITL\'s sensor',
+            '  synthesis is reproduced bit for bit run to run. Every `est_error_*` number',
+            '  above inherits that; nothing in this project can make it repeat.',
+            '- **Arrival has a resolution, and it is in the numbers.** The mission ends',
+            '  when the FCU\'s own `NAV_CONTROLLER_OUTPUT.wp_dist` is inside `WP_RADIUS`',
+            '  AND the robot\'s own estimate is inside the profile\'s',
+            '  `arrival_estimate_tolerance_m` of the commanded setpoint. `wp_dist` is',
+            '  uint16 METRES and truncates, so `mission_duration_s`, `path_length_m` and',
+            '  `goal_pose_error_m` all carry the spread that rule allows.',
+            '- **There is no localization warm-up and no heading alignment.** An Ackermann',
+            '  platform cannot rotate in place, so the run starts at the spawn yaw and',
+            '  `run.json` records `initial_yaw_aligned: false` with that as its reason.',
+            '  None of the spread above comes from a warm-up, because there is none.',
+            '- **MEASURED on this host: the estimate stream can stall mid-mission and',
+            '  then flush, and `est_error_*` shows it.** MAVROS delivers',
+            '  `/mavros/local_position/odom` from the MAVLink link, and that link is not',
+            '  paced by the simulation: in three consecutive `baseline_car` runs the',
+            '  largest gap inside the mission window was 0.14 s, 2.88 s and 2.59 s, the',
+            '  stalled runs ending with ~60 messages carrying header stamps within 10 ms',
+            '  of each other while their contents swept the whole mission. `est_error_*`',
+            '  pairs the estimate with truth BY HEADER STAMP, so a flush like that pairs',
+            '  early poses against late truth and reports metres of "error" the',
+            '  estimator never had. `goal_pose_error_m` is measured from truth alone and',
+            '  is unaffected, so the two columns disagreeing is the signature. The real',
+            '  consequence is not the metric: while the stream is stalled the robot has',
+            '  no fresh position of its own, and both the arrival gate and the',
+            '  no-progress supervisor close on whatever it last reported.',
+        ]
+    else:
+        raise SystemExit(
+            f'unknown mission_driver {driver!r} in {args.experiment_id}\'s runs: this '
+            'report has no prose for that stack, and emitting another platform\'s '
+            'would describe a stack that did not run. Add its bullets here.')
 
     doc += [
         '',
@@ -249,22 +325,7 @@ def main() -> int:
         '- **`seed:` seeds only `ral_faults`\' RNG** — Phase 4.2\'s scan noise and',
         '  dropout. It does not seed the simulator, the planner or the localizer, so a',
         '  baseline run with no fault is not affected by it at all.',
-        '- **`nav2_amcl` exposes no seed.** Its particle filter draws from `drand48`,',
-        '  seeded outside our control, so the estimate differs run to run even with',
-        '  identical sensor input. Every `est_error_*` number inherits that.',
-        '- **ROS callback scheduling and the 20 Hz DWB loop are not deterministic.**',
-        '  Control decisions land on slightly different sim instants each run, which',
-        '  shows up directly in `mission_duration_s` and `path_length_m`.',
-        '- **The start HEADING is aligned before the goal is sent, and it dominates**',
-        '  **everything else.** The localization warm-up is an in-place rotation, so it',
-        '  ends wherever convergence happened to land. With that arbitrary heading the',
-        '  measured spread of `mission_duration_s` over three runs was **12.5%** (71.0 to',
-        '  80.5 s): facing away from the goal, DWB reversed at 0.1 m/s for 40 s instead',
-        '  of turning. The runner now turns back to the scenario\'s declared initial yaw',
-        '  first, using `/amcl_pose` — the robot\'s own estimate, never ground truth —',
-        '  and `run.json` records `initial_yaw_aligned` and the residual AMCL believed',
-        '  it had. The reversing run was real Nav2 behaviour, but it answered a heading',
-        '  no scenario asked for.',
+    ] + driver_bullets + [
         '- **The real-time factor varies with recorder I/O and host load.** It changes',
         '  how long a run takes in wall time, not what it measures: every duration',
         '  above is sim time.',
@@ -274,7 +335,12 @@ def main() -> int:
         '',
     ]
 
-    path = os.path.join(args.repo_root, 'docs', 'repeatability.md')
+    # One file per experiment. Two robots now have baselines, and a single
+    # docs/repeatability.md would mean the second measurement silently
+    # replaced the first - and the two are not comparable anyway: they are
+    # different platforms running different missions.
+    path = os.path.join(args.repo_root, 'docs',
+                        f'repeatability-{args.experiment_id}.md')
     with open(path, 'w') as handle:
         handle.write('\n'.join(doc))
     print(f'--- wrote {path} from {len(runs)} run(s)', flush=True)

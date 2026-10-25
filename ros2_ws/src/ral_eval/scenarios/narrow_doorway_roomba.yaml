@@ -1,0 +1,57 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# HALF OF A PAIR. Its sibling is narrow_doorway_car.yaml: identical world,
+# identical initial_pose, identical goal, differing only in `robot` and
+# `experiment_id`. Together they are the MVP's "two genuinely different robots"
+# acceptance evidence - one mission put to two platforms whose motion
+# constraints, planning and arrival rules are different, with the difference
+# reported from what the runs measured rather than from what was expected.
+#
+# The goal is in room 3, reachable from room 2 only through wall B's 0.70 m
+# doorway at (8.0, 3.0) (ral_apartment.sdf wall_b_lower/wall_b_upper).
+#
+# MEASURED: this platform passes, with outcome `nav2:STATUS_SUCCEEDED`. Its
+# footprint radius is 0.18 m, it rotates in place, and nav2_roomba.yaml's
+# inflation_radius was set to 0.45 specifically so this gap stays traversable
+# in the costmap. Last run: crossed wall A at y = 4.019 and wall B at
+# y = 2.997, finished at (11.453, 2.453), goal_pose_error_m 0.113, 0
+# collisions, 29.9 s sim over 10.71 m of path
+# (runs/narrow_doorway_roomba_20261025T132534Z). The CAR also passes now -
+# narrow_doorway_car.yaml carries that measurement and what changed.
+#
+# The start is (1.0, 4.45) and the goal (11.5, 2.35) rather than
+# baseline_roomba's poses because the pair must be identical, and because the
+# car - which has no path planner - can only be tested against the NARROW GAP
+# if the straight line between them threads both doorways AND the goal lies
+# far enough past wall B that the car's arrival test cannot fire before it.
+# The line y = 4.65 - 0.2x crosses wall A at y = 3.85 (gap 3.55-4.45) and
+# wall B at y = 3.05 (gap 2.65-3.35); it is the offset at which the car's
+# swept body leaves the same 0.104 m at wall A's lower edge as at wall B's
+# upper edge. narrow_doorway_car.yaml carries the full derivation.
+# Nav2 plans its own route and is indifferent to all of it, which is the
+# point: the same mission, one platform planning around geometry and the
+# other driving at it.
+#
+# That makes this run NOT directly comparable with baseline_roomba; it is
+# comparable with narrow_doorway_car, which is the comparison it exists for.
+
+experiment_id: narrow_doorway_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 1.0, y: 4.45, yaw: 0.0}
+goal: {x: 11.5, y: 2.35, yaw: 0.0}
+timeout_sec: 180
+interventions: []

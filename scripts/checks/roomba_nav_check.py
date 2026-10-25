@@ -97,15 +97,19 @@ import argparse
 import hashlib
 import math
 import os
-import re
-import signal
-import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 
 from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory
+# Sibling module, imported by path: this script is executed as a file, so its
+# own directory is sys.path[0] and `common` resolves with no path handling.
+# These assertions are shared with car_nav_check.py and have one
+# implementation there; everything roomba-specific stays in this file.
+from common import (bumper_liveness_check, launch_stack, measure_rtf,
+                    scan_publisher_check, teardown, tf_topology_check,
+                    truth_subscriber_check, write_doc)
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
@@ -158,12 +162,6 @@ EXPECTED_TF_FRAMES = {
     'caster_rear',
     'world',
 }
-
-# Nodes that must never subscribe to simulator truth (ENGINEERING.md section
-# 4). Matched as substrings against live node names.
-NAV_NODE_PATTERNS = ('amcl', 'controller_server', 'planner_server', 'bt_navigator',
-                     'costmap', 'velocity_smoother', 'slam_toolbox', 'behavior_server',
-                     'smoother_server', 'waypoint_follower')
 
 # The ONLY nodes allowed to subscribe to simulator truth. `roomba_nav_check`
 # is this harness, which measures the residual between truth and the estimate;
@@ -381,20 +379,6 @@ class Phase2Check(Node):
         self.initial_pose_pub.publish(msg)
 
 
-def measure_rtf() -> str:
-    """Read the real-time factor gz reports for this world."""
-    try:
-        out = subprocess.run(
-            ['gz', 'topic', '-e', '-t', f'/world/{WORLD}/stats', '-n', '3'],
-            capture_output=True, text=True, timeout=30).stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        return f'unavailable ({type(exc).__name__})'
-    values = re.findall(r'real_time_factor:\s*([0-9.]+)', out)
-    if not values:
-        return 'unavailable (no real_time_factor in /world stats)'
-    return ', '.join(values)
-
-
 def nearest(track, stamp: float):
     """Nearest sample in `track` to `stamp`, or None beyond STAMP_MATCH_S."""
     best = None
@@ -428,6 +412,15 @@ def main() -> int:
     nav2_params = os.path.join(
         get_package_share_directory('ral_bringup'), 'config', 'nav2_roomba.yaml')
     params = yaml.safe_load(open(nav2_params))
+    # Read as data, from the installed copy the running stack is configured
+    # from, and not through the loader the stack uses: the gz entity name the
+    # contact-path proof addresses has to come from the same file that told
+    # the launch layer what to spawn.
+    profile_path = os.path.join(get_package_share_directory('ral_bringup'),
+                                'config', 'robots', 'roomba.yaml')
+    with open(profile_path) as handle:
+        profile = yaml.safe_load(handle)
+    model = profile['model']
     # The envelope Nav2 is CONFIGURED to stay inside, which is what the
     # observed commands are judged against; PLANT_MAX_* above is the wider
     # bound the hardware itself imposes.
@@ -448,10 +441,8 @@ def main() -> int:
     rclpy.init()
     node = Phase2Check()
 
-    with open(log_path, 'w') as log:
-        launch = subprocess.Popen(
-            ['ros2', 'launch', 'ral_bringup', 'roomba_nav.launch.py'],
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    launch, launch_log = launch_stack('roomba_nav.launch.py', log_path)
+    with launch_log:
 
         sim_start = None
         sim_end = 0.0
@@ -467,7 +458,10 @@ def main() -> int:
                 '/map': lambda: node.grid is not None,
             }
             deadline = time.monotonic() + BRINGUP_WALL_LIMIT
-            missing = None
+            # The full gated list, NOT None: a zero-iteration loop would
+            # otherwise leave `missing` falsy and record a PASS nobody
+            # observed.
+            missing = list(needed)
             while time.monotonic() < deadline:
                 node.spin_wall(0.5)
                 missing = [topic for topic, ready in needed.items() if not ready()]
@@ -496,6 +490,12 @@ def main() -> int:
             sim_start = node.sim_now()
             print(f'--- stack up at sim t={sim_start:.2f} s', flush=True)
 
+            # -- bumper liveness, measured BEFORE the mission ------------------
+            # A dead contact path must fail fast rather than after a mission
+            # that then reports "no contact reports". Check 10 reads it.
+            bumper_alive, bumper_detail = bumper_liveness_check(node, WORLD, model)
+            print(f'--- bumper liveness: {bumper_alive} ({bumper_detail})', flush=True)
+
             # -- 1. Map loaded, and the alignment belongs to it ------------------
             # The alignment is only meaningful for the grid it was measured
             # against. ral_eval.frames enforces that on the launch path; this
@@ -514,15 +514,9 @@ def main() -> int:
                    f'sealed to {str(sealed_to)[:16]}')
 
             # -- 2. One /scan publisher, and it is the relay ---------------------
-            scan_pubs = node.get_publishers_info_by_topic('/scan')
-            raw_pubs = node.get_publishers_info_by_topic('/scan_raw')
-            scan_names = sorted(pub.node_name for pub in scan_pubs)
-            raw_names = sorted(pub.node_name for pub in raw_pubs)
+            passed_2, detail_2 = scan_publisher_check(node)
             record(2, '/scan has exactly one publisher: scan_fault_relay',
-                   scan_names == ['scan_fault_relay'] and len(raw_names) == 1,
-                   f'/scan publishers = {scan_names}, /scan_raw publishers = {raw_names}; '
-                   'a second publisher or a different node means lidar faults would not '
-                   'reach every consumer')
+                   passed_2, detail_2)
 
             # -- 3. The relay is a faithful pass-through -------------------------
             # Compared on identical header stamps: the relay must republish the
@@ -553,16 +547,10 @@ def main() -> int:
             # check, and so would any future truth subscriber. The manager's
             # read is legitimate - it projects the body-frame wrench - but
             # that exception is asserted here rather than assumed.
-            truth_subs = node.get_subscriptions_info_by_topic('/ground_truth/odom')
-            truth_sub_names = sorted(sub.node_name for sub in truth_subs)
-            offenders = [name for name in truth_sub_names
-                         if any(pattern in name for pattern in NAV_NODE_PATTERNS)]
-            unexpected = [name for name in truth_sub_names
-                          if name not in TRUTH_SUBSCRIBER_ALLOWLIST]
+            passed_4, detail_4 = truth_subscriber_check(
+                node, TRUTH_SUBSCRIBER_ALLOWLIST)
             record(4, 'only the harness and the fault injector subscribe to truth',
-                   not offenders and not unexpected,
-                   f'/ground_truth/odom subscribers = {truth_sub_names}; navigation '
-                   f'offenders = {offenders}; not allowlisted = {unexpected}')
+                   passed_4, detail_4)
 
             # -- localize, then assert TF and the residual -----------------------
             # Ordering matters twice over:
@@ -596,24 +584,14 @@ def main() -> int:
             node.spin_sim(AMCL_SETTLE_SIM)
 
             # -- 5. TF topology ---------------------------------------------------
-            frames_yaml = yaml.safe_load(node.tf_buffer.all_frames_as_yaml()) or {}
-            parents = {name: info.get('parent') for name, info in frames_yaml.items()}
-            present = set(parents) | {p for p in parents.values() if p}
-            unexpected = present - EXPECTED_TF_FRAMES
-            missing_frames = EXPECTED_TF_FRAMES - present
             topology = {
                 'odom': 'map',
                 'base_link': 'odom',
                 'rplidar_link': 'base_link',
                 'world': 'map',
             }
-            wrong = {child: (parents.get(child), parent)
-                     for child, parent in topology.items()
-                     if parents.get(child) != parent}
-            record(5, 'TF topology', not unexpected and not missing_frames and not wrong,
-                   f'frames = {sorted(present)}; unexpected = {sorted(unexpected)}, '
-                   f'missing = {sorted(missing_frames)}, wrong parents (got, want) = '
-                   f'{wrong or "none"}')
+            passed_5, detail_5 = tf_topology_check(node, EXPECTED_TF_FRAMES, topology)
+            record(5, 'TF topology', passed_5, detail_5)
 
             # -- 6. Alignment residual with the robot stationary -----------------
             if not ok or node.amcl is None:
@@ -698,9 +676,15 @@ def main() -> int:
                    f'(|y - {DOORWAY_Y}| <= {DOORWAY_HALF_GAP}): {len(threaded)}')
 
             # -- 10. No collisions -------------------------------------------------
-            record(10, 'no collisions during the mission', not node.collisions,
+            # "No contact reports" is only evidence when the path that would
+            # have carried one is shown to exist: a contact sensor is silent
+            # until something touches it, so a dead bridge and a clean run
+            # look identical from the count alone.
+            record(10, 'no collisions during the mission',
+                   bool(bumper_alive) and not node.collisions,
                    f'{len(node.collisions)} contact report(s) on /bumper'
-                   + (f': {sorted(set(node.collisions))}' if node.collisions else ''))
+                   + (f': {sorted(set(node.collisions))}' if node.collisions else '')
+                   + f'. Contact path liveness: {bumper_detail}')
 
             # -- 11. The estimate is an estimate, not truth ------------------------
             errors = []
@@ -747,7 +731,7 @@ def main() -> int:
                    f'|cmd_vel.angular.z| = {node.cmd_max_angular:.3f} rad/s (plant '
                    f'{PLANT_MAX_ANGULAR}); {node.plan_count} /plan publication(s)')
 
-            rtf = measure_rtf()
+            rtf = measure_rtf(WORLD)
 
         except SystemExit:
             pass
@@ -755,14 +739,7 @@ def main() -> int:
             sim_end = node.sim_now()
             node.destroy_node()
             rclpy.shutdown()
-            try:
-                os.killpg(os.getpgid(launch.pid), signal.SIGINT)
-                launch.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(launch.pid), signal.SIGKILL)
-                launch.wait(timeout=10)
-            except ProcessLookupError:
-                pass
+            teardown(launch)
 
     sim_duration = (sim_end - sim_start) if sim_start is not None else 0.0
     passed = all(result[2] for result in results) and len(results) == 12
@@ -881,9 +858,13 @@ def main() -> int:
         '  measured frame alignment so RViz can draw truth on the map; no',
         '  navigation component reads it, and Phase 3\'s metrics must read',
         '  `maps/apartment_frames.yaml` directly rather than listening to it.',
-        '- **One robot, one world, one goal.** The car-like platform is Phase 5,',
-        '  and the MVP\'s "Roomba passes, car does not" scenario depends on the',
-        '  same 0.70 m doorway measured in check 9.',
+        '- **This is the Roomba half of the two-robot evidence.** The car-like',
+        '  platform is `ral_car`, an Ackermann vehicle driven by ArduRover SITL',
+        '  over MAVROS; its own closed-loop proof is `docs/car-closed-loop.md`,',
+        '  written by `scripts/checks/car_nav_check.sh`. The MVP\'s "Roomba',
+        '  passes, car does not" scenario is the `narrow_doorway_roomba` /',
+        '  `narrow_doorway_car` artifact pair under `runs/`, and it depends on',
+        '  the same 0.70 m doorway measured in check 9.',
         '- **This harness exercises no fault.** It runs a fault-free mission on',
         '  purpose: it is the control the fault runs are read against, and',
         '  check 3\'s byte-identical `/scan` holds only while degradation is off.',
@@ -894,9 +875,7 @@ def main() -> int:
         '',
     ]
     doc_path = os.path.join(args.repo_root, 'docs', 'nav-closed-loop.md')
-    with open(doc_path, 'w') as handle:
-        handle.write('\n'.join(doc))
-    print(f'--- wrote {doc_path}', flush=True)
+    write_doc(doc_path, doc)
     print(f'--- launch log: {log_path}', flush=True)
 
     return 0 if passed else 1

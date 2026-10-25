@@ -105,11 +105,15 @@ def generate_launch_description() -> LaunchDescription:
             description='Where to write the measured world->map alignment. '
                         'Defaults to the source tree; rebuild afterwards.'),
 
-        # gz, the bridge, robot_state_publisher and ground_truth_node.
+        # gz, the bridge, robot_state_publisher, the spawn and
+        # ground_truth_node. `robot: roomba` is explicit and not a default:
+        # the committed map is the grid the ROOMBA's lidar saw from the
+        # Roomba's sensor height, and rebuilding it from another body would
+        # silently change what every committed alignment belongs to.
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                os.path.join(bringup_share, 'launch', 'roomba_sim.launch.py')),
-            launch_arguments={'world': world}.items()),
+                os.path.join(bringup_share, 'launch', 'robot_sim.launch.py')),
+            launch_arguments={'world': world, 'robot': 'roomba'}.items()),
 
         # The sole publisher of /scan. slam_toolbox maps from the same stream
         # the robot's own stack consumes, so the map is built from what the

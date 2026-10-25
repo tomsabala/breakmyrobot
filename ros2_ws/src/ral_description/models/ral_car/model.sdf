@@ -1,0 +1,609 @@
+<?xml version="1.0" ?>
+<!--
+  ral_car - Ackermann-steered rover, driven by ArduRover SITL over MAVLink.
+
+  Provenance: unlike ral_roomba, this model is NOT a reproduction of a specific
+  product. Every dimension below is CHOSEN to describe a small Ackermann
+  research rover of the size that fits the ral_apartment world, and is stated
+  here so no reader mistakes it for a datasheet figure:
+    base box        0.50 x 0.30 x 0.12 m, mass 8.0 kg  - chosen
+    wheelbase       0.35 m (front axle +0.175, rear axle -0.175)  - chosen
+    track           0.26 m (wheels at +/-0.13)  - chosen
+    wheel radius    0.06 m, width 0.04 m, mass 0.5 kg  - chosen
+    max steer angle 0.52 rad (~30 deg), the <limit> on both knuckle joints
+  Derived, not chosen:
+    minimum turning radius = wheelbase / tan(max steer)
+                           = 0.35 / tan(0.52) = 0.611 m
+      This is the one geometric property the project's claims rest on: the car
+      is non-holonomic and cannot turn in place, which is what makes the 0.70 m
+      doorway scenario a genuine platform difference rather than a tuning one.
+      It is also TURN_RADIUS in ral_bringup/config/rover_ackermann.parm.
+    base_link inertia, solid box (m/12)*(b^2+c^2) with m = 8.0:
+      ixx = (8/12)*(0.30^2+0.12^2) = 0.0696
+      iyy = (8/12)*(0.50^2+0.12^2) = 0.1763
+      izz = (8/12)*(0.50^2+0.30^2) = 0.2267
+    wheel inertia, solid cylinder r = 0.06, l = 0.04, m = 0.5:
+      ixx = iyy = (m/12)*(3r^2+l^2) = 0.000517 ; izz = (m/2)*r^2 = 0.0009
+      (0.000517, not the 0.000258 an earlier draft carried: that value failed
+       `gz sdf -k` with "invalid inertia" because ixx+iyy < izz violates the
+       triangle inequality every physical rigid body obeys.)
+    knuckle inertia: 1e-4 on each diagonal - a deliberate round placeholder.
+      The knuckles are 0.2 kg stubs whose only job is to carry the steer joint;
+      their inertia influences nothing measurable at this mass ratio. Said
+      plainly rather than dressed up as a computed figure.
+    spawn height z = 0.06 = wheel radius, which is also half the 0.12 m base
+      box height, so the hull centre and the wheel centres share a plane and
+      the tyres sit on the floor. ral_bringup/config/robots/car.yaml carries it.
+
+  No model-level <pose>: sdformat_urdf rejects `<model> tags with <pose>` and
+  robot_state_publisher aborts on it (verified on ral_roomba). The spawn pose is
+  supplied at runtime by robot_sim.launch.py from the scenario.
+-->
+<sdf version="1.9">
+  <model name="ral_car">
+
+    <!-- Chassis. The collision is named base_collision because the contact
+         sensor below references it by name, and the bumper check asserts on the
+         generated contact name `ral_car::base_link::base_collision`. The
+         collision box is identical to the visual box: a collision that is
+         smaller than what the operator sees would let the car pass through a
+         doorway it visibly cannot fit, which is precisely the measurement the
+         narrow-doorway scenarios make. -->
+    <link name="base_link">
+      <inertial>
+        <mass>8.0</mass>
+        <inertia>
+          <ixx>0.0696</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.1763</iyy><iyz>0</iyz>
+          <izz>0.2267</izz>
+        </inertia>
+      </inertial>
+      <!-- The hull sits 0.04 m ABOVE the axle plane. base_link's origin is the
+           axle plane - the wheels are posed at z = 0 with radius 0.06, so the
+           tyres touch the floor 0.06 m below it - and a box centred on that
+           origin would have its underside exactly on the floor. MEASURED
+           failure before this offset: 55,990 /bumper contact reports in one
+           mission, the chassis scraping `ground_plane` for the whole run,
+           which both destroys the collision evidence (collision_count counts
+           the floor) and adds a friction force nothing models. With the box
+           half-height 0.06 and the pose offset 0.04, the hull's underside is
+           at z = -0.02 in base_link while the tyres' contact plane is at
+           z = -0.06, so the hull rides 0.04 m clear of the ground.-->
+      <collision name="base_collision">
+        <pose>0 0 0.04 0 0 0</pose>
+        <geometry><box><size>0.50 0.30 0.12</size></box></geometry>
+      </collision>
+      <visual name="base_visual">
+        <pose>0 0 0.04 0 0 0</pose>
+        <geometry><box><size>0.50 0.30 0.12</size></box></geometry>
+        <material><ambient>0.20 0.18 0.10 1</ambient><diffuse>0.55 0.45 0.15 1</diffuse></material>
+      </visual>
+
+      <!-- gz-sim-imu-system must be loaded by the world or this sensor
+           publishes nothing at all (verified on ral_roomba: no /imu topic
+           appears). <gz_frame_id> is likewise required - without it the
+           messages are stamped `ral_car/base_link/imu_sensor` instead of
+           `base_link`, which resolves in no TF tree.
+           On THIS platform the sensor is additionally load-bearing: it is the
+           sensor named by ArduPilotPlugin's <imuName> below. Without it the
+           autopilot has no attitude source, EKF3 never initialises and the
+           vehicle never arms.
+
+           It deliberately carries NO <topic>, unlike ral_roomba's. MEASURED
+           failure: with <topic>imu</topic> the sensor publishes on /imu,
+           while ArduPilotPlugin subscribes to the SCOPED topic it computes
+           itself - scopedName(imu entity) + "/imu", i.e.
+           /world/<world>/model/ral_car/link/base_link/sensor/imu_sensor/imu
+           (ArduPilotPlugin.cc:1166). The override therefore left the plugin
+           with no IMU message, so it never sent an FDM state frame; SITL
+           logged "No JSON sensor message received, resending servos", the
+           plugin logged "Duplicate input frame", and because <lock_step> is
+           on, gz never advanced - /clock was silent and every bring-up topic
+           timed out. The bridge config carries the scoped name instead. -->
+      <!-- The sensor POSE is a 180 deg roll, exactly as ArduPilot's own
+           iris_with_standoffs carries. It is not decoration: the plugin's
+           <modelXYZToAirplaneXForwardZDown> assumes the IMU already reports in
+           a z-DOWN frame, and a z-up IMU inverts the simulated magnetic field.
+           MEASURED failure without it: the autopilot refused to arm with
+           "Arm: Check mag field (z diff:1058>200)" - 1058 mGauss is twice the
+           earth field's z component at the SITL home, i.e. the exact signature
+           of a sign-flipped z axis - and the measured world -> ekf_local yaw
+           came out at -2.76 rad for a vehicle spawned facing +x.
+
+           The update rate is one sample per physics step (the world's
+           max_step_size is 0.002 s), so the lock-stepped plugin has fresh IMU
+           data for every FDM frame it sends. -->
+      <sensor name="imu_sensor" type="imu">
+        <pose degrees="true">0 0 0 180 0 0</pose>
+        <gz_frame_id>base_link</gz_frame_id>
+        <update_rate>500</update_rate>
+        <always_on>1</always_on>
+      </sensor>
+
+      <!-- Bumper. A contact sensor IGNORES its <topic>: gz always publishes on
+           /world/<world>/model/<model>/link/<link>/sensor/<sensor>/contact
+           (verified). The bridge config uses that generated name; the <topic>
+           here is inert and kept only so the SDF is self-describing.
+           Requires gz-sim-contact-system in the world. Without this sensor the
+           collision_count metric has no source at all for this robot, and a
+           car that scraped every wall would score as a clean run. -->
+      <sensor name="bumper" type="contact">
+        <topic>bumper</topic>
+        <update_rate>50</update_rate>
+        <always_on>1</always_on>
+        <contact>
+          <collision>base_collision</collision>
+        </contact>
+      </sensor>
+    </link>
+
+    <!-- RPLIDAR A1, visual only: the scanner body sits on the hull inside the
+         car's own footprint, so a collision here would add nothing but contact
+         noise.
+         NOTHING ON THIS PLATFORM CONSUMES THE LIDAR. ArduRover does not read it
+         - it plans and navigates on EKF3 position alone, and no Nav2 costmap
+         runs for this robot. The scanner is carried so the Phase 0 sensor gate,
+         the scan-liveness check and the recorded evidence apply to both robots
+         identically. That is also exactly why `scan_degradation` is REFUSED for
+         this robot in ral_bringup/config/robots/car.yaml: degrading a stream
+         that steers nothing would be a fault with no effect presented as one.
+         The sensor block itself is byte-for-byte the ral_roomba block, because
+         it is the same modelled RPLIDAR A1 (0.15-12 m, 360 samples, ~10 Hz,
+         sigma = 0.015 m) and two robots must not carry two different scanners
+         whose scans are then compared. -->
+    <link name="rplidar_link">
+      <!-- z = 0.14, not 0.10: the hull's top face is at 0.04 + 0.06 = 0.10 in
+           base_link, so a scanner centred there would be half-buried in the
+           body it is mounted on. A gpu_lidar renders the vehicle's OWN visual
+           geometry, so that produces self-returns at about 0.25 m in a stream
+           recorded as evidence. 0.14 = hull top 0.10 + 0.02 clearance + the
+           0.02 half-height of the 0.04 m scanner body, so the scanner body's
+           underside sits 0.02 m clear of the hull. The Roomba mounts the same
+           scanner the same way: centre 0.08, hull top 0.045, body underside
+           0.015 m clear. -->
+      <pose>0 0 0.14 0 0 0</pose>
+      <inertial>
+        <mass>0.17</mass>
+        <inertia>
+          <ixx>8.24e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>8.24e-5</iyy><iyz>0</iyz>
+          <izz>1.2e-4</izz>
+        </inertia>
+      </inertial>
+      <visual name="rplidar_visual">
+        <geometry><cylinder><radius>0.0375</radius><length>0.04</length></cylinder></geometry>
+        <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+      </visual>
+
+      <!-- Without <gz_frame_id> the scan is stamped with the scoped sensor name
+           (`ral_car::rplidar_link::rplidar`), which matches no TF frame and
+           silently breaks every consumer that transforms the scan (verified). -->
+      <sensor name="rplidar" type="gpu_lidar">
+        <topic>scan_raw</topic>
+        <gz_frame_id>rplidar_link</gz_frame_id>
+        <update_rate>10</update_rate>
+        <always_on>1</always_on>
+        <visualize>false</visualize>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>360</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>0.15</min>
+            <max>12.0</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0</mean>
+            <stddev>0.015</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+    </link>
+
+    <!-- Rear axle: driven, not steered. Both rear wheel joints take throttle
+         channel 2 below; there is no differential, so in a turn the two driven
+         wheels fight each other slightly through tyre slip. That is a modelled
+         consequence of this simplification, not a bug, and it is one reason the
+         measured minimum turning radius is checked against the geometric 0.611 m
+         rather than assumed equal to it. -->
+    <link name="rear_left_wheel">
+      <pose>-0.175 0.13 0 -1.5707 0 0</pose>
+      <inertial>
+        <mass>0.5</mass>
+        <inertia>
+          <ixx>0.000517</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000517</iyy><iyz>0</iyz>
+          <izz>0.0009</izz>
+        </inertia>
+      </inertial>
+      <collision name="rear_left_wheel_collision">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <surface>
+          <friction>
+            <ode><mu>1.0</mu><mu2>1.0</mu2></ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name="rear_left_wheel_visual">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+      </visual>
+    </link>
+
+    <link name="rear_right_wheel">
+      <pose>-0.175 -0.13 0 -1.5707 0 0</pose>
+      <inertial>
+        <mass>0.5</mass>
+        <inertia>
+          <ixx>0.000517</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000517</iyy><iyz>0</iyz>
+          <izz>0.0009</izz>
+        </inertia>
+      </inertial>
+      <collision name="rear_right_wheel_collision">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <surface>
+          <friction>
+            <ode><mu>1.0</mu><mu2>1.0</mu2></ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name="rear_right_wheel_visual">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+      </visual>
+    </link>
+
+    <!-- Steering knuckles. Visual only, deliberately: a knuckle collision would
+         sit inside the front wheel's own collision and generate permanent
+         self-contact, which the bumper sensor would report as a collision the
+         car never had. The knuckle is the intermediate body that lets the front
+         wheel both steer (about z, at the knuckle joint) and roll (about y, at
+         the wheel joint) - a single joint cannot do both. -->
+    <link name="steer_left">
+      <pose>0.175 0.13 0 0 0 0</pose>
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>1e-4</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-4</iyy><iyz>0</iyz>
+          <izz>1e-4</izz>
+        </inertia>
+      </inertial>
+      <visual name="steer_left_visual">
+        <geometry><box><size>0.04 0.04 0.06</size></box></geometry>
+        <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.4 0.4 0.4 1</diffuse></material>
+      </visual>
+    </link>
+
+    <link name="steer_right">
+      <pose>0.175 -0.13 0 0 0 0</pose>
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>1e-4</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>1e-4</iyy><iyz>0</iyz>
+          <izz>1e-4</izz>
+        </inertia>
+      </inertial>
+      <visual name="steer_right_visual">
+        <geometry><box><size>0.04 0.04 0.06</size></box></geometry>
+        <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.4 0.4 0.4 1</diffuse></material>
+      </visual>
+    </link>
+
+    <!-- Front wheels: steered, undriven. Same cylinder, mass, inertia and
+         friction as the rear pair - a front tyre with different grip would
+         change the understeer behaviour for a reason nothing in the model
+         justifies. -->
+    <link name="front_left_wheel">
+      <pose>0.175 0.13 0 -1.5707 0 0</pose>
+      <inertial>
+        <mass>0.5</mass>
+        <inertia>
+          <ixx>0.000517</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000517</iyy><iyz>0</iyz>
+          <izz>0.0009</izz>
+        </inertia>
+      </inertial>
+      <collision name="front_left_wheel_collision">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <surface>
+          <friction>
+            <ode><mu>1.0</mu><mu2>1.0</mu2></ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name="front_left_wheel_visual">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+      </visual>
+    </link>
+
+    <link name="front_right_wheel">
+      <pose>0.175 -0.13 0 -1.5707 0 0</pose>
+      <inertial>
+        <mass>0.5</mass>
+        <inertia>
+          <ixx>0.000517</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>0.000517</iyy><iyz>0</iyz>
+          <izz>0.0009</izz>
+        </inertia>
+      </inertial>
+      <collision name="front_right_wheel_collision">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <surface>
+          <friction>
+            <ode><mu>1.0</mu><mu2>1.0</mu2></ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name="front_right_wheel_visual">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+      </visual>
+    </link>
+
+    <joint name="rplidar_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>rplidar_link</child>
+    </joint>
+
+    <!-- expressed_in="__model__" keeps the axis in model coordinates despite the
+         -90 deg roll on the wheel links, so every wheel spins about +y. Without
+         it the rolling axis follows the link's own rotated frame and the car
+         drives sideways. -->
+    <joint name="rear_left_wheel_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>rear_left_wheel</child>
+      <axis>
+        <xyz expressed_in="__model__">0 1 0</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <joint name="rear_right_wheel_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>rear_right_wheel</child>
+      <axis>
+        <xyz expressed_in="__model__">0 1 0</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <!-- The +/-0.52 rad limit is the physical steering stop, and it is what
+         makes the minimum turning radius finite and equal to 0.611 m. It is not
+         a tuning parameter: widening it here without changing TURN_RADIUS in
+         rover_ackermann.parm would give the autopilot a geometry the vehicle
+         does not have. -->
+    <joint name="steer_left_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>steer_left</child>
+      <axis>
+        <xyz expressed_in="__model__">0 0 1</xyz>
+        <limit>
+          <lower>-0.52</lower>
+          <upper>0.52</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <joint name="steer_right_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>steer_right</child>
+      <axis>
+        <xyz expressed_in="__model__">0 0 1</xyz>
+        <limit>
+          <lower>-0.52</lower>
+          <upper>0.52</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <!-- Parented to the KNUCKLE, not to base_link: the wheel must inherit the
+         steer angle and then roll about its own axle. Parenting it to the
+         chassis would give a front wheel that rolls but never turns, and the
+         car would drive straight regardless of the steering command. -->
+    <joint name="front_left_wheel_joint" type="revolute">
+      <parent>steer_left</parent>
+      <child>front_left_wheel</child>
+      <axis>
+        <xyz expressed_in="__model__">0 1 0</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <joint name="front_right_wheel_joint" type="revolute">
+      <parent>steer_right</parent>
+      <child>front_right_wheel</child>
+      <axis>
+        <xyz expressed_in="__model__">0 1 0</xyz>
+        <limit>
+          <lower>-1e16</lower>
+          <upper>1e16</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <!-- Publishes on /world/<world>/model/ral_car/joint_state as gz.msgs.Model. -->
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher"/>
+
+    <!-- Simulator TRUTH. Bridged to /ground_truth/tf and consumed only by
+         ral_eval's ground_truth_node for evaluation and display. It must never
+         be bridged into /tf - see config/bridge_car_ral_apartment.yaml. -->
+    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <publish_model_pose>true</publish_model_pose>
+      <use_pose_vector_msg>true</use_pose_vector_msg>
+      <static_publisher>false</static_publisher>
+      <update_frequency>50</update_frequency>
+    </plugin>
+
+    <!-- The autopilot interface. This plugin IS the actuation path for this
+         robot: there is no DiffDrive and no /cmd_vel. It opens a JSON FDM
+         socket, sends IMU and pose state to ArduRover SITL and applies the
+         servo outputs SITL returns to the joints named below.
+
+         The FDM port must appear as the literal `<fdm_port_in>9002</fdm_port_in>`:
+         robot_sim.launch.py renders the spawn SDF by replacing every occurrence
+         of that string with the port derived from the SITL instance, so
+         concurrent runs on different ROS_DOMAIN_IDs do not share a host-global
+         UDP port. The occurrence in this comment is rewritten too, which keeps
+         the two consistent; a port written any other way is NOT rewritten, and
+         SITL then waits for frames sent to a port nothing is listening on.
+
+         <lock_step>1</lock_step> ties SITL's clock to gz stepping. Without it
+         SITL runs on wall time while gz runs slower, and every time-based metric
+         for this robot is measured against a clock the autopilot did not use.
+
+         <imuName> names the sensor on base_link above; a typo here produces an
+         autopilot that never gets attitude and never arms.
+
+         The two rotation blocks are the frame conversions ArduPilot requires:
+         model XYZ (x forward, z up) -> airplane x-forward z-down, and gz ENU ->
+         NED. They are the values verified on ArduPilot's own r1_rover SITL
+         model; getting them wrong yields a vehicle whose heading estimate is
+         mirrored or rotated 90 deg, which reads as an EKF fault and is not one. -->
+    <plugin name="ArduPilotPlugin" filename="ArduPilotPlugin">
+      <fdm_addr>127.0.0.1</fdm_addr>
+      <fdm_port_in>9002</fdm_port_in>
+      <lock_step>1</lock_step>
+      <have_32_channels>0</have_32_channels>
+      <modelXYZToAirplaneXForwardZDown degrees="true">0 0 0 180 0 0</modelXYZToAirplaneXForwardZDown>
+      <gazeboXYZToNED degrees="true">0 0 0 180 0 90</gazeboXYZToNED>
+      <imuName>base_link::imu_sensor</imuName>
+
+      <!-- Channel numbering is a contract with ral_bringup/config/rover_ackermann.parm:
+           channel 0 is SERVO1 (SERVO1_FUNCTION 26, GroundSteering) and channel 2
+           is SERVO3 (SERVO3_FUNCTION 70, Throttle). A mismatch between the two
+           files sends throttle to the knuckles and steering to the wheels; the
+           car then moves wrongly in a way that reads as a control-tuning bug
+           rather than as a configuration error, so the mapping is stated in
+           both files and changed in both or neither.
+
+           `offset -0.5` with `multiplier` is ArduPilot's standard servo mapping,
+           not an arbitrary pair of numbers: the plugin normalises the PWM output
+           to 0..1, the offset re-centres that to -0.5..+0.5, and the multiplier
+           scales it into joint units. 1.04 rad/unit therefore gives +/-0.52 rad
+           at full deflection, exactly the knuckle joint limit.
+
+           The rear-wheel multiplier is 70 rad/s. The offset applies first, so
+           full throttle is (1.0 - 0.5) * 70 = 35 rad/s, i.e. 35 * 0.06 =
+           2.1 m/s of wheel-surface speed - twice the 1.0 m/s CRUISE_SPEED, so
+           ArduRover's open-loop cruise throttle (CRUISE_THROTTLE, 50 by
+           default) lands at 1.05 m/s and its speed controller regulates from
+           there. It was 200, i.e. (1.0 - 0.5) * 200 * 0.06 = 6 m/s at full
+           throttle, and that was MEASURED to be wrong: half throttle was then
+           3 m/s and the vehicle overshot to 2.3 m/s against a configured 1.0
+           before its speed controller could pull it back, skidding through
+           turns. It was then 35, which the same arithmetic makes 1.05 m/s at
+           FULL throttle - so cruise throttle asked for 0.52 m/s and every
+           artifact recorded a mean achieved speed near half the configured
+           one. Sizing the actuator to the plant puts the autopilot's own
+           regulation in range instead of asking it to correct an actuator
+           that is six times too strong or two times too weak. -->
+
+      <!-- BOTH knuckles take channel 0 and the same gains, so both front wheels
+           are commanded to the SAME angle. This is PARALLEL steering, not true
+           Ackermann differential geometry: a real Ackermann linkage turns the
+           inner wheel further than the outer one. The simplification costs tyre
+           scrub in tight turns and is recorded as a limitation in
+           docs/car-closed-loop.md and in the car's capability notes.
+           The property every claim in this project rests on survives it: the
+           vehicle remains non-holonomic with a finite minimum turning radius of
+           wheelbase 0.35 / tan(0.52) = 0.611 m, and cannot turn in place.
+
+           The multiplier is NEGATIVE, and that sign was MEASURED rather than
+           derived: ArduPilot's GroundSteering output is positive for a RIGHT
+           turn (RC convention), while a positive rotation about the knuckle's
+           +z axis turns the wheel LEFT. With +1.04 the vehicle drove away
+           from a target to its north-east and pinned itself against the south
+           wall at (3.70, 0.20); with -1.04 and nothing else changed it
+           steered towards the target and ended at (3.70, 2.08). A sign error
+           here reads as a navigation failure, not as a configuration error,
+           which is why it is recorded with the evidence that settled it. -->
+      <control channel="0">
+        <jointName>steer_left_joint</jointName>
+        <useForce>1</useForce>
+        <type>POSITION</type>
+        <p_gain>2.0</p_gain>
+        <i_gain>0</i_gain>
+        <d_gain>0.1</d_gain>
+        <i_max>0</i_max>
+        <i_min>0</i_min>
+        <cmd_max>10.0</cmd_max>
+        <cmd_min>-10.0</cmd_min>
+        <offset>-0.5</offset>
+        <multiplier>-1.04</multiplier>
+      </control>
+
+      <control channel="0">
+        <jointName>steer_right_joint</jointName>
+        <useForce>1</useForce>
+        <type>POSITION</type>
+        <p_gain>2.0</p_gain>
+        <i_gain>0</i_gain>
+        <d_gain>0.1</d_gain>
+        <i_max>0</i_max>
+        <i_min>0</i_min>
+        <cmd_max>10.0</cmd_max>
+        <cmd_min>-10.0</cmd_min>
+        <offset>-0.5</offset>
+        <multiplier>-1.04</multiplier>
+      </control>
+
+      <!-- Rear axle, throttle channel 2, VELOCITY control: SITL commands a wheel
+           speed and the plugin's PI loop drives the joint to it. Both rear
+           joints take the same channel and the same gains - there is no
+           differential in this model, which is stated in the rear-axle comment
+           above. -->
+      <control channel="2">
+        <jointName>rear_left_wheel_joint</jointName>
+        <useForce>1</useForce>
+        <type>VELOCITY</type>
+        <p_gain>0.2</p_gain>
+        <i_gain>0.06</i_gain>
+        <d_gain>0.0001</d_gain>
+        <i_max>1</i_max>
+        <i_min>-1</i_min>
+        <cmd_max>10</cmd_max>
+        <cmd_min>-10</cmd_min>
+        <offset>-0.5</offset>
+        <multiplier>70</multiplier>
+      </control>
+
+      <control channel="2">
+        <jointName>rear_right_wheel_joint</jointName>
+        <useForce>1</useForce>
+        <type>VELOCITY</type>
+        <p_gain>0.2</p_gain>
+        <i_gain>0.06</i_gain>
+        <d_gain>0.0001</d_gain>
+        <i_max>1</i_max>
+        <i_min>-1</i_min>
+        <cmd_max>10</cmd_max>
+        <cmd_min>-10</cmd_min>
+        <offset>-0.5</offset>
+        <multiplier>70</multiplier>
+      </control>
+    </plugin>
+
+  </model>
+</sdf>
