@@ -8,6 +8,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/FaultEvent.msg
+  msg/FrameAlignment.msg
   msg/ActiveFaults.msg
   msg/MissionState.msg
   srv/SpawnObstacle.srv
