@@ -253,18 +253,26 @@
       </link>
     </model>
 
-    <!-- Spawn. z = 0.05 puts the chassis centre 0.05 m above the floor, which
-         is what the wheel (-0.014) and caster (-0.035) z offsets in
-         models/ral_roomba/model.sdf assume; the two numbers are coupled.
-         The model-level pose lives here because sdformat_urdf refuses a <pose>
-         inside <model> and robot_state_publisher dies on it.
-         Resolving model:// requires GZ_SIM_RESOURCE_PATH to contain the
-         installed share/ral_description/models directory - roomba_sim.launch.py
-         sets it. -->
-    <include>
-      <uri>model://ral_roomba</uri>
-      <pose>0.5 0.5 0.05 0 0 0</pose>
-    </include>
+    <!-- No robot is included here. This world carries GEOMETRY ONLY: both
+         robots are spawned at RUNTIME through /world/<world>/create by
+         ral_bringup/launch/robot_sim.launch.py, at the pose the scenario
+         declares.
+
+         A static <include> would put the body in EVERY run of this world -
+         and since Phase 5 there are two bodies, so the car would stand in the
+         Roomba's lidar, invalidating maps/apartment.pgm and every committed
+         baseline measured against it.
+
+         Spawn height is a property of the body, not of the world, and lives
+         in ral_bringup/config/robots/<robot>.yaml as `spawn.z`: 0.05 for
+         ral_roomba, which is what the wheel (-0.014) and caster (-0.035) z
+         offsets in models/ral_roomba/model.sdf assume - the two numbers are
+         coupled - and 0.06 for ral_car, half its 0.12 m base box.
+
+         The spawn path still needs GZ_SIM_RESOURCE_PATH to contain the
+         installed share/ral_description/models directory; robot_sim.launch.py
+         sets it, for `model://` references inside this file as well as for
+         `ros2 run ros_gz_sim create`. -->
 
   </world>
 </sdf>
