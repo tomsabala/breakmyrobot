@@ -70,7 +70,10 @@ localization, planner or fault injection yet.
 
 ## Not covered here
 
-No map, localization, planner or controller exists yet (Phase 2); no
-fault can be injected yet (Phase 4). Nothing in Phase 1 consumes `/imu`
-or `/joint_states`: check 9 reads them directly, and no state estimator
-fuses them.
+This harness runs the bare platform: no map, localization, planner or
+controller is started here, and no fault is injected here. Both exist
+now and are exercised elsewhere - the navigation stack by
+`scripts/checks/roomba_nav_check.py`, the five faults by the
+`ral_eval` scenario runs under `runs/`. Nothing in this stack consumes
+`/imu` or `/joint_states`: check 9 reads them directly, and no state
+estimator fuses them.

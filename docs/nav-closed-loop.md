@@ -1,6 +1,6 @@
 # Map, AMCL and Nav2 closed loop — measured proof
 
-Measured 2026-10-23 10:33 UTC by
+Measured 2026-10-25 08:01 UTC by
 `scripts/checks/roomba_nav_check.sh`, which launches
 `ral_bringup/roomba_nav.launch.py`, localizes the robot against the
 committed static map and sends one `NavigateToPose` goal in room 3 that
@@ -14,16 +14,16 @@ injected yet, and no dashboard exists; the scenario runner arrived in Phase 3.
 | --- | --- | --- | --- |
 | 1 | static map loaded and matched to its alignment | PASS | resolution 0.05000000074505806 m, 241 x 162 cells = 12.05 x 8.10 m (>= 12.00 x 8.00 required for the apartment), sha256(apartment.pgm) = 47d1e2ad01a41a52, alignment sealed to 47d1e2ad01a41a52 |
 | 2 | /scan has exactly one publisher: scan_fault_relay | PASS | /scan publishers = ['scan_fault_relay'], /scan_raw publishers = ['ros_gz_bridge']; a second publisher or a different node means lidar faults would not reach every consumer |
-| 3 | relay output equals relay input | PASS | at stamp 12.100000000: 360 ranges, frame_id 'rplidar_link' -> 'rplidar_link', element-for-element identical = True |
-| 4 | no navigation component subscribes to truth | PASS | /ground_truth/odom subscribers = ['roomba_nav_check']; navigation offenders = [] |
+| 3 | relay output equals relay input | PASS | at stamp 11.800000000: 360 ranges, frame_id 'rplidar_link' -> 'rplidar_link', element-for-element identical = True |
+| 4 | only the harness and the fault injector subscribe to truth | PASS | /ground_truth/odom subscribers = ['fault_manager', 'roomba_nav_check']; navigation offenders = []; not allowlisted = [] |
 | 5 | TF topology | PASS | frames = ['base_link', 'caster_front', 'caster_rear', 'left_wheel', 'map', 'odom', 'right_wheel', 'rplidar_link', 'world']; unexpected = [], missing = [], wrong parents (got, want) = none |
-| 6 | alignment residual | PASS | stationary \|AMCL - truth\| = 0.1128 m (limit 0.15), covariance trace 0.2217 after an in-place rotation at 0.6 rad/s. This is the floor below which estimate error cannot be interpreted: it is map error plus alignment error, not localization error |
-| 7 | mission succeeds | PASS | NavigateToPose result status = 4 (SUCCEEDED) after 37.6 s sim (limit 180) |
-| 8 | goal reached in ground truth | PASS | \|final truth - goal\| in map = 0.031 m (limit 0.25); truth world = (10.469, 6.497) |
-| 9 | threaded the 0.70 m doorway | PASS | 1 crossing(s) of x = 8.0 at y = [3.045]; inside the gap (\|y - 3.0\| <= 0.35): 1 |
+| 6 | alignment residual | PASS | stationary \|AMCL - truth\| = 0.1008 m (limit 0.15), covariance trace 0.2225 after an in-place rotation at 0.6 rad/s. This is the floor below which estimate error cannot be interpreted: it is map error plus alignment error, not localization error |
+| 7 | mission succeeds | PASS | NavigateToPose result status = 4 (SUCCEEDED) after 37.3 s sim (limit 180) |
+| 8 | goal reached in ground truth | PASS | \|final truth - goal\| in map = 0.034 m (limit 0.25); truth world = (10.469, 6.487) |
+| 9 | threaded the 0.70 m doorway | PASS | 1 crossing(s) of x = 8.0 at y = [3.043]; inside the gap (\|y - 3.0\| <= 0.35): 1 |
 | 10 | no collisions during the mission | PASS | 0 contact report(s) on /bumper |
-| 11 | estimate is an estimate, not truth | PASS | mean \|AMCL - truth\| = 0.0707 m, max = 0.1130 m over 103 paired samples (required: > 0.005 so it is not truth, < 0.5 so it is localized) |
-| 12 | commands match the configured envelope | PASS | max \|cmd_vel.linear.x\| = 0.400 m/s (configured 0.4, required 0.380-0.4, plant 0.46), max \|cmd_vel.angular.z\| = 0.395 rad/s (plant 1.9); 37 /plan publication(s) |
+| 11 | estimate is an estimate, not truth | PASS | mean \|AMCL - truth\| = 0.0683 m, max = 0.1047 m over 103 paired samples (required: > 0.005 so it is not truth, < 0.5 so it is localized) |
+| 12 | commands match the configured envelope | PASS | max \|cmd_vel.linear.x\| = 0.400 m/s (configured 0.4, required 0.380-0.4, plant 0.46), max \|cmd_vel.angular.z\| = 0.520 rad/s (plant 1.9); 37 /plan publication(s) |
 
 ## Run
 
@@ -39,8 +39,8 @@ injected yet, and no dashboard exists; the scenario runner arrived in Phase 3.
 | `inflation_radius` in force | local_costmap 0.45 m, global_costmap 0.45 m |
 | Initial pose (world -> map) | (0.5, 0.5, 0.0) -> (0.000, 0.000, 0.000) |
 | Goal (world -> map) | (10.5, 6.5, 1.57) -> (10.000, 6.000, 1.570) |
-| Sim time elapsed | 45.85 s |
-| Real-time factor (`/world/ral_apartment/stats`) | 0.99976055734651548, 0.99989051198893719, 0.99544484439206193 |
+| Sim time elapsed | 45.23 s |
+| Real-time factor (`/world/ral_apartment/stats`) | 1.0019502962516538, 0.9987311121220489, 1.000005000025 |
 | Image | `sha256:ce16e2833f14392f3d5e4c49c812cfe4855b8829f41825119d8c3e363fcef6f6` |
 
 ## What these checks establish
@@ -59,14 +59,21 @@ injected yet, and no dashboard exists; the scenario runner arrived in Phase 3.
 - The estimate is an estimate: AMCL's pose differs from truth at every
   sample, but stays localized (check 11). Equality would mean truth had
   leaked into localization.
-- `/scan` has exactly one publisher, `scan_fault_relay`, and its output is
-  byte-identical to `/scan_raw` (checks 2, 3). Phase 4.2 injects sensor
-  degradation at that node, so every lidar consumer — AMCL and both
+- `/scan` has exactly one publisher, `scan_fault_relay`, and with
+  degradation OFF its output is byte-identical to `/scan_raw`
+  (checks 2, 3). This harness injects no fault, so check 3 asserts the
+  relay's DISABLED pass-through: the clean stream every non-fault run
+  is compared against. The same node applies lidar degradation when the
+  fault manager tells it to, so every lidar consumer — AMCL and both
   costmaps — is downstream of the fault by construction.
-- No navigation component subscribes to `/ground_truth/odom` (check 4),
-  and the complete TF frame set is asserted (check 5), so truth bridged
-  onto `/tf` under any name — including the simulator's own
-  `<world> -> <model>` names — fails the check.
+- The only subscribers to `/ground_truth/odom` are this harness and
+  `fault_manager` (check 4): no navigation component reads truth, and
+  the one legitimate exception — the fault injector, which projects a
+  body-frame wrench into the world frame and tells the robot nothing —
+  is on an allowlist, so a new truth consumer fails the check instead
+  of passing unnoticed. The complete TF frame set is asserted too
+  (check 5), so truth bridged onto `/tf` under any name — including
+  the simulator's own `<world> -> <model>` names — fails as well.
 - The commands the plant received reached the envelope Nav2 is
   configured for and did not exceed it (check 12, two-sided on linear
   speed). The lower bound is the load-bearing half: `velocity_smoother`
@@ -108,9 +115,13 @@ injected yet, and no dashboard exists; the scenario runner arrived in Phase 3.
   measured frame alignment so RViz can draw truth on the map; no
   navigation component reads it, and Phase 3's metrics must read
   `maps/apartment_frames.yaml` directly rather than listening to it.
-- **No fault is exercised.** Scan degradation, obstacle spawning,
-  communication loss and kidnapping are Phase 4. Nothing here shows how
-  the stack behaves when a subsystem is broken.
 - **One robot, one world, one goal.** The car-like platform is Phase 5,
   and the MVP's "Roomba passes, car does not" scenario depends on the
   same 0.70 m doorway measured in check 9.
+- **This harness exercises no fault.** It runs a fault-free mission on
+  purpose: it is the control the fault runs are read against, and
+  check 3's byte-identical `/scan` holds only while degradation is off.
+  The fault evidence lives in the Phase 4 scenario runs
+  (`obstacle_roomba`, `scan_degraded_roomba`, `mobility_fault_roomba`,
+  `kidnap_roomba`, `blocked_goal_roomba`), each with its own
+  `metrics.json` and `plot.png` under `runs/`.
