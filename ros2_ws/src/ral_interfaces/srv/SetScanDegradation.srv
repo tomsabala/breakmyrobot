@@ -14,24 +14,54 @@
 #
 # Degrade the lidar stream at the driver/transport boundary.
 #
-# Served as /faults/set_scan_degradation by ral_faults/scan_fault_relay.py
-# (Phase 4.2). Injection point: scan_fault_relay, the SOLE publisher of /scan
-# - so AMCL and both costmaps are downstream of this by construction, and the
-# undegraded stream stays visible on /scan_raw for comparison.
+# Served as /faults/set_scan_degradation by ral_faults/fault_manager.py, which
+# applies it by calling scan_fault_relay's own
+# /scan_fault_relay/set_degradation with this same request. The relay remains
+# the injection point and the SOLE publisher of /scan; the manager serves the
+# /faults/* name because one node has to own the capability gate, the
+# FaultEvent stream and /faults/active, and splitting that ownership would let
+# two nodes disagree about which faults are in force.
+#
+# Injection point: scan_fault_relay, the SOLE publisher of /scan - so AMCL and
+# both costmaps are downstream of this by construction, and the undegraded
+# stream stays visible on /scan_raw for comparison.
 #
 # `enabled` false restores the faithful pass-through; the remaining fields are
-# then ignored.
+# then ignored, and are therefore not range-checked on a disable. Disabling
+# when nothing is in force is a FAILURE, not a no-op, for the same reason
+# ClearObstacle's is. A disable publishes `cleared` for the fault it removed
+# and NO event of its own: this kind is a singleton, so the disable is not
+# itself something in force, and an `activated` for it would leave a reader
+# computing "in force = activated - cleared" with a permanent phantom. The
+# disable's id appears in that `cleared` event's detail and in the service
+# response.
 #
 # `range_noise_stddev_m` is additive zero-mean Gaussian noise per beam.
 # `max_range_m` truncates returns beyond it to the scan's own range_max+ (i.e.
 # reports them as no-return), modelling a lidar that has lost reach.
 # `blind_sector_start_deg`/`blind_sector_end_deg` blank an angular sector,
-# measured in the scan's own frame, counter-clockwise from angle_min.
+# measured in the scan's own frame, counter-clockwise from start to end; when
+# start > end the sector wraps through +-180 deg.
 # `dropout_probability` is the per-beam chance of a no-return, drawn from the
 # RNG seeded by the scenario's `seed`.
 #
+# On an enable, every one of those five is checked against
+# ral_faults/config/fault_catalogue.yaml's scan_degradation.param_ranges and
+# refused when outside it or non-finite - `max_range_m: 0.0`, the value a
+# partially filled request carries, would otherwise blank every beam and be
+# reported as a successful activation.
+#
+# `fault_id` is the join key for this fault instance: the value the caller will
+# see again on every FaultEvent the manager publishes for it. The scenario
+# runner sends the id it minted (<kind>_<1-based index after sorting by
+# at_sec>, scenario.py:308). An EMPTY string means "allocate one", which is
+# what the dashboard sends; the manager answers with <kind>_ui_<n>. The
+# RESPONSE carries the id the manager used - the one sent, or the minted one
+# when the request left it empty.
+#
 # `success` is true only once the new parameters are in force in the relay.
 
+string fault_id
 bool enabled
 float32 range_noise_stddev_m
 float32 max_range_m
@@ -39,5 +69,6 @@ float32 blind_sector_start_deg
 float32 blind_sector_end_deg
 float32 dropout_probability
 ---
+string fault_id
 bool success
 string message

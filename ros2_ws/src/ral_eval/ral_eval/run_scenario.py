@@ -62,11 +62,13 @@ second runner from a stale node - so scripts/run_scenario.sh takes an flock on
 
 Who publishes a FaultEvent
 --------------------------
-The fault manager (Phase 4) owns `requested`, `activated` and `cleared`,
-because only it observes the underlying gz or relay call. This runner
-publishes exactly one kind of FaultEvent: `rejected`, and only for the case
-the manager cannot report - its service was not there to be called. In Phase 3
-that is every intervention, by construction.
+The fault manager (ral_faults/fault_manager.py) owns `requested`,
+`activated`, `rejected` and `cleared`, because only it observes the
+underlying gz or relay call. This runner publishes exactly one kind of
+FaultEvent: `rejected`, and only for the two cases the manager cannot report
+- its service was not there to be called, or it never answered. A service
+that answered success=false has already published its own `rejected` with the
+same id, and this runner adds nothing to it.
 
 Frames
 ------
@@ -252,6 +254,8 @@ RECORD_TOPICS = (
                                             # fault, roomba_teleop_check 7)
     '/mission_state',                       # the mission window itself
     '/fault_events',                        # fault_to_response_s anchors
+    '/faults/active',                       # the manager's authoritative snapshot of
+                                            # what was in force, latched
     '/rosout',                              # node-side errors beside the run
     '/navigate_to_pose/_action/status',     # nav2_result, verbatim
     '/navigate_to_pose/_action/feedback',   # recoveries, distance_remaining
@@ -452,9 +456,15 @@ class RunAbort(Exception):
 # through world_pose_to_map. Converting an obstacle pose would place the box
 # somewhere else entirely, so the rule is written here, beside the code that
 # would be the obvious wrong place to "fix".
+#
+# Every builder takes the intervention's `fault_id` and sets it FIRST. That id
+# is the join key: the manager echoes it on every FaultEvent it publishes for
+# this instance, so run.json's intervention record and the bag's event stream
+# can be joined without matching on timing or parameters.
 
-def _spawn_request(params: dict) -> SpawnObstacle.Request:
+def _spawn_request(params: dict, fault_id: str) -> SpawnObstacle.Request:
     request = SpawnObstacle.Request()
+    request.fault_id = fault_id
     request.name = params['name']
     request.pose.position.x = params['pose']['x']
     request.pose.position.y = params['pose']['y']
@@ -469,14 +479,16 @@ def _spawn_request(params: dict) -> SpawnObstacle.Request:
     return request
 
 
-def _clear_request(params: dict) -> ClearObstacle.Request:
+def _clear_request(params: dict, fault_id: str) -> ClearObstacle.Request:
     request = ClearObstacle.Request()
+    request.fault_id = fault_id
     request.name = params['name']
     return request
 
 
-def _scan_request(params: dict) -> SetScanDegradation.Request:
+def _scan_request(params: dict, fault_id: str) -> SetScanDegradation.Request:
     request = SetScanDegradation.Request()
+    request.fault_id = fault_id
     request.enabled = params['enabled']
     request.range_noise_stddev_m = params['range_noise_stddev_m']
     request.max_range_m = params['max_range_m']
@@ -486,8 +498,9 @@ def _scan_request(params: dict) -> SetScanDegradation.Request:
     return request
 
 
-def _mobility_request(params: dict) -> SetMobilityFault.Request:
+def _mobility_request(params: dict, fault_id: str) -> SetMobilityFault.Request:
     request = SetMobilityFault.Request()
+    request.fault_id = fault_id
     request.enabled = params['enabled']
     request.force_x_n = params['force_x_n']
     request.force_y_n = params['force_y_n']
@@ -495,8 +508,9 @@ def _mobility_request(params: dict) -> SetMobilityFault.Request:
     return request
 
 
-def _kidnap_request(params: dict) -> Kidnap.Request:
+def _kidnap_request(params: dict, fault_id: str) -> Kidnap.Request:
     request = Kidnap.Request()
+    request.fault_id = fault_id
     request.new_pose.position.x = params['pose']['x']
     request.new_pose.position.y = params['pose']['y']
     qx, qy, qz, qw = quaternion_of_yaw(params['pose']['yaw'])
@@ -917,9 +931,21 @@ def dispatch_intervention(node: ScenarioRunner, intervention: dict, world: str,
     Call the service that implements one intervention, and report honestly.
 
     Returns the run.json record. The runner never claims an effect: `applied`
-    is true only when the service itself returned success, and when the
-    service does not exist - which is every intervention until Phase 4 - the
-    record says `not_applied` and one FaultEvent{state: rejected} is published.
+    is true only when the service itself returned success. The request carries
+    the intervention's id, so every FaultEvent the manager publishes for it
+    joins back to this record.
+
+    This function publishes a FaultEvent only for the two cases the MANAGER
+    cannot report - its service was not there to call, or it never answered.
+    A service that answered success=false has already published its own
+    `rejected` carrying the same id and the same reason; a second one here
+    would double-count in fault_to_response_s and in any timeline built from
+    the event stream.
+
+    `manager_fault_id` is the id the MANAGER answered with - the one it
+    actually joined its FaultEvents on. It should equal `id`, because the
+    runner always sends a non-empty one; recording it makes a mismatch
+    visible in run.json instead of invisible.
     """
     kind = intervention['type']
     service_name, service_type, build_request = DISPATCH[kind]
@@ -938,6 +964,7 @@ def dispatch_intervention(node: ScenarioRunner, intervention: dict, world: str,
         'available': False,
         'success': False,
         'message': '',
+        'manager_fault_id': '',
         'result': 'not_applied',
     }
 
@@ -951,14 +978,14 @@ def dispatch_intervention(node: ScenarioRunner, intervention: dict, world: str,
 
     if not client.service_is_ready():
         detail = (f'service {service_name} unavailable after {SERVICE_WAIT_SIM:.1f} s sim '
-                  '(ral_faults/fault_manager.py implements it in Phase 4)')
+                  '(fault_manager is not running or did not advertise it)')
         record['message'] = detail
         node.publish_fault_rejected(intervention['id'], kind, world, target, detail)
         node.destroy_client(client)
         return record
 
     record['available'] = True
-    future = client.call_async(build_request(intervention['params']))
+    future = client.call_async(build_request(intervention['params'], intervention['id']))
     deadline = node.sim_now() + SERVICE_WAIT_SIM
     wall_deadline = time.monotonic() + SERVICE_WAIT_SIM * 10.0 + 30.0
     while not future.done():
@@ -977,14 +1004,11 @@ def dispatch_intervention(node: ScenarioRunner, intervention: dict, world: str,
     response = future.result()
     record['success'] = bool(response.success)
     record['message'] = response.message
+    record['manager_fault_id'] = response.fault_id
     if response.success:
         # The fault manager publishes requested/activated/cleared; it observed
         # the gz call, this runner did not.
         record['result'] = 'applied'
-    else:
-        node.publish_fault_rejected(
-            intervention['id'], kind, world, target,
-            f'{service_name} returned success=false: {response.message}')
     node.destroy_client(client)
     return record
 
@@ -1063,7 +1087,15 @@ def run(argv=None) -> int:
         alignment_text = handle.read()
     git_dirty = _git_dirty(args.repo_root)
     git_sha = _git_sha(args.repo_root)
-    launch_command = ['ros2', 'launch', 'ral_bringup', 'roomba_nav.launch.py']
+    # The scenario's own values, not defaults: `world` selects the SDF, the
+    # bridge config and the truth frame; `robot` selects the capability row
+    # and the gz model a fault addresses; `seed` is the scan relay's RNG seed.
+    # env.json copies this list verbatim, so the artifacts record exactly what
+    # was launched.
+    launch_command = ['ros2', 'launch', 'ral_bringup', 'roomba_nav.launch.py',
+                      f'world:={scenario["world"]}',
+                      f'robot:={scenario["robot"]}',
+                      f'seed:={scenario["seed"]}']
     write_json(os.path.join(run_dir, 'env.json'), {
         'image_ref': args.image_ref,
         'git_sha': f'{git_sha}+dirty' if git_dirty else git_sha,

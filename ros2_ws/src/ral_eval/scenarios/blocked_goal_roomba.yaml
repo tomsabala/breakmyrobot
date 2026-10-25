@@ -1,0 +1,61 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# MVP acceptance scenario 5: a mission that CANNOT be completed, allowed to
+# fail visibly and accurately.
+#
+# The goal in room 3 is reachable only through wall B's doorway: a 0.70 m gap
+# centred on (8.0, 3.0), between wall_b_lower (y <= 2.65) and wall_b_upper
+# (y >= 3.35). At 10 s sim a 0.2 x 0.9 x 0.6 m static box is spawned exactly
+# there. 0.9 m seals the 0.70 m gap with 0.1 m of overlap onto each wall stub,
+# so there is no sliver for the planner to squeeze a 0.335 m-wide robot
+# through, and the obstacle layer sees a continuous wall once the lidar has
+# swept it.
+#
+# 10 s is before the robot is anywhere near wall B (it is still in room 1), so
+# the seal exists well before it is observed. The box is NOT spawned on top of
+# the robot, and the goal cell itself stays free: the pre-flight check would
+# refuse a goal inside an obstacle, and this run must fail at PLANNING, not at
+# validation.
+#
+# The expected terminal state is a non-success nav2_result, and BOTH forms are
+# honest results that are reported as-is and never retried:
+#
+#   STATUS_ABORTED   the BT exhausts its recoveries (clear costmaps, spin,
+#                    backup, wait) and the planner still cannot produce a path
+#   STATUS_CANCELED  the 180 s timeout fires first and the runner cancels
+#
+# If this run ever SUCCEEDS, the seal missed the gap: check the spawned pose
+# against wall B's y in [2.65, 3.35] before changing anything else - the
+# obstacle pose stays in the gz WORLD frame and is not converted through
+# world_to_map.
+#
+# collision_count must stay 0: a robot that gives up is a result, a robot that
+# drives into the box is a controller failure, and the two must not be
+# confused.
+
+experiment_id: blocked_goal_roomba
+robot: roomba
+world: ral_apartment
+seed: 1
+initial_pose: {x: 0.5, y: 0.5, yaw: 0.0}
+goal: {x: 10.5, y: 6.5, yaw: 1.57}
+timeout_sec: 180
+interventions:
+  - at_sec: 10.0
+    type: spawn_obstacle
+    params:
+      name: doorway_seal
+      pose: {x: 8.0, y: 3.0, yaw: 0.0}
+      size: {x: 0.2, y: 0.9, z: 0.6}

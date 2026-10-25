@@ -31,12 +31,15 @@ from ral_eval.metrics import (
     debounce_events,
     first_response,
     metric,
+    min_clearance,
     moving_average,
     pair_nearest,
     path_length,
     plan_divergence,
+    point_to_box,
     resample_linear,
     resample_zoh,
+    scan_divergence,
     stopped_time,
     unwrap_angles,
 )
@@ -251,3 +254,96 @@ def test_moving_average_ignores_missing_samples():
 def test_wrapping_is_consistent_with_math_for_a_full_turn():
     rates = central_difference([0.0, 2.0 * math.pi], 1.0, angular=True)
     assert abs(rates[0]) < 1e-9, rates
+
+
+def _box(name='blocker', cx=2.0, cy=0.0, yaw=0.0, sx=1.0, sy=0.2,
+         t_start=0.0, t_end=100.0) -> dict:
+    return {'name': name, 'cx': cx, 'cy': cy, 'yaw': yaw, 'sx': sx, 'sy': sy,
+            't_start': t_start, 't_end': t_end}
+
+
+def test_point_to_box_measures_to_the_surface_of_a_ROTATED_rectangle():
+    """
+    A 1.0 x 0.2 m box turned 90 degrees presents its SHORT side.
+
+    A centre-to-centre distance gives 2.0 and an axis-aligned reading gives
+    1.5; only rotating the point into the box frame gives 1.9.
+    """
+    assert abs(point_to_box(2.0, 0.0, 0.0, 0.0, math.pi / 2.0, 1.0, 0.2) - 1.9) < 1e-12
+    assert abs(point_to_box(2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.2) - 1.5) < 1e-12
+
+
+def test_point_to_box_is_negative_inside_and_measures_the_corner_outside():
+    assert point_to_box(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.2) == -0.1
+    # Diagonally off a corner: 3-4-5 triangle from the corner at (0.5, 0.1).
+    assert abs(point_to_box(3.5, 4.1, 0.0, 0.0, 0.0, 1.0, 0.2) - 5.0) < 1e-12
+
+
+def test_min_clearance_subtracts_the_footprint_and_reports_penetration():
+    track = [(1.0, 0.0, 0.0, 0.0), (2.0, 1.3, 0.0, 0.0)]
+    # At t=2 the robot centre is 0.2 m from the box face; a 0.18 m footprint
+    # leaves 0.02 m.
+    result = min_clearance(track, [_box()], radius=0.18)
+    assert abs(result['value'] - 0.02) < 1e-12, result
+    assert result['samples'] == 2
+    # A wider footprint on the same track is a penetration, not a clamp to 0.
+    overlapping = min_clearance(track, [_box()], radius=0.5)
+    assert abs(overlapping['value'] + 0.3) < 1e-12, overlapping
+
+
+def test_min_clearance_ignores_samples_outside_an_obstacle_s_lifetime():
+    """A box that was not there yet cannot be approached."""
+    track = [(1.0, 1.45, 0.0, 0.0), (5.0, 0.0, 0.0, 0.0)]
+    result = min_clearance(track, [_box(t_start=4.0, t_end=9.0)], radius=0.18)
+    assert result['samples'] == 1
+    assert abs(result['value'] - (1.5 - 0.18)) < 1e-12, result
+
+
+def test_min_clearance_reports_an_obstacle_with_no_samples_as_unmeasured():
+    result = min_clearance([(1.0, 0.0, 0.0, 0.0)],
+                           [_box(name='late', t_start=50.0, t_end=60.0)], radius=0.18)
+    assert result['per_obstacle'] == {'late': None}
+    assert result['value'] is None
+
+
+def test_scan_divergence_joins_on_the_EXACT_stamp_and_drops_the_unpaired():
+    scans = [((10, 0), [1.0, 2.0]), ((10, 100000000), [1.0, 9.0])]
+    raw = [((10, 0), [1.0, 2.0])]
+    result = scan_divergence(scans, raw, activation_t=10.05)
+    # The second scan has no raw partner at that exact stamp: a nearest-stamp
+    # join would have paired it with the first and called it divergent.
+    assert result['pairs_compared'] == 1
+    # ...and the sweep that did not join is COUNTED, not silently dropped:
+    # 1 of 2 compared reads very differently from 1 of 1.
+    assert result['pairs_unmatched'] == 1
+    assert result['pairs_length_mismatch'] == 0
+    assert result['pairs_divergent_before_activation'] == 0
+    assert result['first_divergent_sim_s'] is None
+
+
+def test_scan_divergence_counts_a_partner_of_a_different_length_as_uncompared():
+    """A relay that changed the beam count compares nothing, and must say so."""
+    result = scan_divergence([((7, 0), [1.0, 2.0])], [((7, 0), [1.0, 2.0, 3.0])],
+                             activation_t=0.0)
+    assert result['pairs_compared'] == 0
+    assert result['pairs_length_mismatch'] == 1
+    assert result['pairs_unmatched'] == 0
+    assert result['mean_divergent_beam_fraction_after'] is None
+
+
+def test_scan_divergence_counts_pre_activation_difference_rather_than_hiding_it():
+    scans = [((5, 0), [1.0, 2.0]), ((20, 0), [1.0, 9.0])]
+    raw = [((5, 0), [1.0, 2.5]), ((20, 0), [1.0, 2.0])]
+    result = scan_divergence(scans, raw, activation_t=10.0)
+    assert result['pairs_compared'] == 2
+    assert result['pairs_divergent_before_activation'] == 1
+    assert result['first_divergent_sim_s'] == 5.0
+    assert abs(result['mean_divergent_beam_fraction_after'] - 0.5) < 1e-12
+
+
+def test_scan_divergence_treats_two_no_returns_as_equal_and_inf_against_a_range_as_not():
+    inf = float('inf')
+    identical = scan_divergence([((1, 0), [inf, 1.0])], [((1, 0), [inf, 1.0])], 0.0)
+    assert identical['mean_divergent_beam_fraction_after'] == 0.0
+    blanked = scan_divergence([((1, 0), [inf, 1.0])], [((1, 0), [3.0, 1.0])], 0.0)
+    assert abs(blanked['mean_divergent_beam_fraction_after'] - 0.5) < 1e-12

@@ -1,0 +1,158 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The fault catalogue: one block per FaultEvent.KIND_*, and the single source
+# for what a fault kind IS. The fault manager reads it (ral_faults/catalogue.py)
+# to build every FaultEvent it publishes; the Phase 6 dashboard reads it to
+# label a control; ral_eval/test/test_mission_vocabulary.py pins it against
+# run_scenario.DISPATCH, run_scenario.injection_point and FaultEvent's own
+# constants, so a drift between this file and the code that dispatches against
+# it fails the build rather than a run.
+#
+# Fields
+# ------
+#   category        environment (world geometry), dynamics (physics wrench),
+#                   state (truth pose) or perception (data path). What KIND of
+#                   thing the fault changes, which is what decides whether a
+#                   given robot can be subject to it at all.
+#   service         the ROS service name the manager serves. Must equal
+#                   run_scenario.DISPATCH[kind][0].
+#   srv_type        the ral_interfaces service type that name carries.
+#   injection_point a {world} format string. Formatted, it must equal
+#                   run_scenario.injection_point(kind, world) and the literal
+#                   table in FaultEvent.msg. It names the boundary that was
+#                   actually altered, never a description of it.
+#   target_rule     how FaultEvent.target is derived, reproducing
+#                   run_scenario._target_of: `params.name` (the entity the
+#                   request names), `literal:<topic>` (a fixed stream), or
+#                   `model` (the robot's gz model name, from capabilities.yaml).
+#   lifetime        keyed_set  many instances may be in force at once, keyed by
+#                              the entity name
+#                   singleton  at most one in force; re-enabling SUPERSEDES
+#                   oneshot    changes the world once and is not a state, so it
+#                              never appears in /faults/active
+#   cleared_by      the kind that removes it, `self_disable` when the same
+#                   service with enabled:false removes it, or null when nothing
+#                   can - a one-shot cannot be cleared, and a dashboard must
+#                   not offer a clear control for one.
+#   alters_truth    true when the fault changes the simulated world or the
+#                   body's actual state (so ground truth itself moves), false
+#                   when it only changes what the robot perceives or can do.
+#   honesty_note    the limitation that must be repeated verbatim wherever this
+#                   fault is named: the node docstring, the dashboard label and
+#                   any report. Empty only when a fault is exactly what its
+#                   name says, which is true only of a real world change.
+#   param_ranges    inclusive [min, max] per numeric service field, with null
+#                   for unbounded on that side. REQUIRED, including as an
+#                   empty block: an absent block in this project means
+#                   "undeclared", not "unbounded" (the `faults:` list idiom in
+#                   capabilities.yaml). ral_faults/catalogue.py:check_params
+#                   refuses a request outside a declared range, and refuses a
+#                   NaN or infinite value for EVERY field of every kind - so
+#                   an empty block still means finiteness is checked. The
+#                   bounds come from the modelled hardware and are pinned
+#                   against ral_eval/scenario.py's INTERVENTION_PARAM_RANGES
+#                   by ral_faults/test/test_fault_catalogue.py, so the
+#                   scenario schema and the service boundary cannot drift.
+
+faults:
+  spawn_obstacle:
+    category: environment
+    service: /faults/spawn_obstacle
+    srv_type: ral_interfaces/srv/SpawnObstacle
+    injection_point: "/world/{world}/create (gz UserCommands)"
+    target_rule: params.name
+    lifetime: keyed_set
+    cleared_by: clear_obstacle
+    alters_truth: true
+    honesty_note: ""
+    param_ranges: {}
+
+  clear_obstacle:
+    category: environment
+    service: /faults/clear_obstacle
+    srv_type: ral_interfaces/srv/ClearObstacle
+    injection_point: "/world/{world}/remove (gz UserCommands)"
+    target_rule: params.name
+    lifetime: oneshot
+    cleared_by: null
+    alters_truth: true
+    honesty_note: ""
+    param_ranges: {}
+
+  scan_degradation:
+    category: perception
+    service: /faults/set_scan_degradation
+    srv_type: ral_interfaces/srv/SetScanDegradation
+    injection_point: "scan_fault_relay (driver/transport level)"
+    target_rule: literal:/scan
+    lifetime: singleton
+    cleared_by: self_disable
+    alters_truth: false
+    honesty_note: >-
+      Corrupts the LaserScan stream between the sensor bridge and its
+      consumers. The simulated lidar itself stays healthy: Gazebo Harmonic
+      cannot change SDF sensor noise at runtime.
+    # RPLIDAR A1 as modelled: ral_description/models/ral_roomba/model.sdf
+    # gives it a 0.15-12.0 m range and a full -pi..pi scan. A max_range_m of
+    # 0.0 (the proto default of a partially filled request) would turn every
+    # beam into a no-return and be reported as a successful activation.
+    param_ranges:
+      range_noise_stddev_m: [0.0, null]
+      max_range_m: [0.15, 12.0]
+      blind_sector_start_deg: [-180.0, 180.0]
+      blind_sector_end_deg: [-180.0, 180.0]
+      dropout_probability: [0.0, 1.0]
+
+  mobility_fault:
+    category: dynamics
+    service: /faults/set_mobility_fault
+    srv_type: ral_interfaces/srv/SetMobilityFault
+    injection_point: "/world/{world}/wrench/persistent (gz physics)"
+    target_rule: model
+    lifetime: singleton
+    cleared_by: self_disable
+    alters_truth: true
+    honesty_note: >-
+      An external wrench on the base link, not a degraded actuator. DiffDrive
+      commands wheel-joint velocities, so the wrench changes motion only once
+      it exceeds what the wheels can absorb - MEASURED on this plant at a
+      commanded 0.400 m/s: -15 N and -30 N produce no deficit at all, -60 N
+      produces 25% and pushes the body backwards, -120 N produces 90%.
+      force_x_n/force_y_n are BODY-frame and are re-projected into the world
+      frame, the only frame ApplyLinkWrench accepts. `activated` means the
+      wrench was published with the gz bridge subscribed; gz acknowledges
+      nothing.
+    # Deliberately no bounds: any FINITE wrench is one gz can apply, and an
+    # implausibly large one is a visible result rather than an invalid
+    # request. check_params still refuses NaN and infinity.
+    param_ranges: {}
+
+  kidnap:
+    category: state
+    service: /faults/kidnap
+    srv_type: ral_interfaces/srv/Kidnap
+    injection_point: "/world/{world}/set_pose (gz entity pose)"
+    target_rule: model
+    lifetime: oneshot
+    cleared_by: null
+    alters_truth: true
+    honesty_note: >-
+      Teleports the body. Linear and angular velocity are NOT zeroed, so the
+      robot keeps the twist it had, and z is set by the manager (the scenario
+      schema has no z).
+    # No bounds: the world has no declared extent to bound a pose against,
+    # and a teleport outside the apartment is a visible, reportable result.
+    # check_params still refuses NaN and infinity.
+    param_ranges: {}

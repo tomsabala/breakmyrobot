@@ -4,11 +4,13 @@
   <name>ral_faults</name>
   <version>0.1.0</version>
   <description>
-    Fault-injection boundary nodes. Each one sits on a real data path between a
-    simulated device and its consumers, so a fault changes the data a driver
-    would deliver rather than a dashboard field. Phase 2 contains one,
-    scan_fault_relay, which is the sole publisher of /scan and currently a
-    faithful pass-through of /scan_raw; Phase 4.2 adds scan degradation to it.
+    Fault injection: the nodes that make a fault a change in the simulated
+    world, a physical capability, a sensor stream or a communication path -
+    never a dashboard field. scan_fault_relay sits on the lidar data path as
+    the sole publisher of /scan and degrades it in place; fault_manager serves
+    every /faults/* service, owns the requested/activated/rejected/cleared
+    lifecycle on /fault_events and the latched /faults/active snapshot, and
+    gates every request against this package's own config/capabilities.yaml.
   </description>
   <maintainer email="noreply@example.com">Resilient Autonomy Lab</maintainer>
   <license>Apache-2.0</license>
@@ -16,6 +18,32 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
 
+  <!-- Phase 4, all imported by fault_manager.py: ral_interfaces carries the
+       five fault services and the FaultEvent/ActiveFaults vocabulary;
+       ros_gz_interfaces carries the gz service and wrench types the faults
+       are actually injected through; std_srvs is /faults/clear_all's Trigger;
+       nav_msgs is the ground-truth Odometry the body-frame wrench is
+       projected with; geometry_msgs is the Pose/Vector3 the spawn and
+       teleport requests carry; ament_index_python and python3-yaml resolve
+       and read THIS package's own config/fault_catalogue.yaml and
+       config/capabilities.yaml (catalogue.py), installed into its share
+       directory by setup.py. The files live here, with their only code
+       reader: resolving another package's share directory at runtime is a
+       runtime dependency on it, and that edge cannot be declared because
+       ral_bringup already exec_depends ral_faults. -->
+  <exec_depend>ral_interfaces</exec_depend>
+  <exec_depend>ros_gz_interfaces</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <!-- test_fault_catalogue.py pins this package's config/ against
+       ral_eval's DISPATCH table, injection_point, _target_of and
+       INTERVENTION_PARAM_RANGES. ral_eval depends on neither ral_faults nor
+       ral_bringup, so this test edge is one-way and acyclic. -->
+  <test_depend>ral_eval</test_depend>
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

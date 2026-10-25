@@ -49,7 +49,7 @@ import sys
 
 from action_msgs.msg import GoalStatus
 from ral_eval.bagio import ral_stamp, read_bag, stamp_of, truth_track
-from ral_eval.frames import wrap_to_pi
+from ral_eval.frames import world_pose_to_map, wrap_to_pi
 from ral_interfaces.msg import FaultEvent, MissionState
 
 import yaml
@@ -57,7 +57,17 @@ import yaml
 # 2: est_error_floor_m was renamed to est_error_at_start_pose_m, and
 # fault_to_response_s' null case became a null instead of an empty list. A v1
 # metrics.json cannot be read by the v2 report script.
-METRICS_VERSION = 2
+# 3: obstacle_min_clearance_m and scan_degradation_divergence were added, and
+# /scan and /scan_raw are read from the bag to compute the second. A v2
+# reader sees two metric keys it does not know; a v3 reader asked for a v2
+# file finds them absent.
+# 4: scan_degradation_divergence gained pairs_unmatched and
+# pairs_length_mismatch - the sweeps that were NOT compared, which a v3 file
+# does not carry at all and whose absence cannot be told from zero.
+# scripts/checks/repeatability_report.py asserts this number against its own
+# METRICS_VERSION_SUPPORTED and refuses an older run, so the bump is
+# load-bearing rather than documentation.
+METRICS_VERSION = 4
 
 STAMP_MATCH_S = 0.05        # truth<->estimate pairing window, as in the Phase 2 harness
 CMD_ZERO_EPS = 0.01         # m/s and rad/s below which a command is "stopped"
@@ -135,9 +145,15 @@ TOPIC_MAP = '/map'
 TOPIC_ACTION_STATUS = '/navigate_to_pose/_action/status'
 TOPIC_ACTION_FEEDBACK = '/navigate_to_pose/_action/feedback'
 
+# Both halves of the lidar path: scan_degradation_divergence is the proof
+# that the degraded stream and the raw one differ only after activation.
+TOPIC_SCAN = '/scan'
+TOPIC_SCAN_RAW = '/scan_raw'
+
 READ_TOPICS = [TOPIC_TRUTH, TOPIC_AMCL, TOPIC_CMD, TOPIC_PLAN, TOPIC_BUMPER,
                TOPIC_MISSION, TOPIC_FAULTS, TOPIC_INITIALPOSE, TOPIC_MAP,
-               TOPIC_ACTION_STATUS, TOPIC_ACTION_FEEDBACK]
+               TOPIC_ACTION_STATUS, TOPIC_ACTION_FEEDBACK,
+               TOPIC_SCAN, TOPIC_SCAN_RAW]
 
 
 def metric(value, unit: str, source: str, definition: str, reason: str = None) -> dict:
@@ -568,6 +584,134 @@ def first_response(activated_t: float, plans: list, cmds: list, recoveries: list
     return out
 
 
+def point_to_box(px: float, py: float, cx: float, cy: float, yaw: float,
+                 sx: float, sy: float) -> float:
+    """
+    Signed distance from a point to an ORIENTED rectangle's surface, in map.
+
+    Negative inside. The box is rotated, so the point is rotated into the
+    box's frame first: a centre-to-centre distance, or an axis-aligned
+    comparison in `map`, gives a different number for every obstacle whose
+    yaw is not zero - and `map` is rotated relative to `world` by the measured
+    alignment, so EVERY obstacle is rotated here.
+    """
+    dx_world = px - cx
+    dy_world = py - cy
+    local_x = dx_world * math.cos(-yaw) - dy_world * math.sin(-yaw)
+    local_y = dx_world * math.sin(-yaw) + dy_world * math.cos(-yaw)
+    dx = abs(local_x) - sx / 2.0
+    dy = abs(local_y) - sy / 2.0
+    if dx > 0.0 or dy > 0.0:
+        return math.hypot(max(dx, 0.0), max(dy, 0.0))
+    return max(dx, dy)
+
+
+def min_clearance(track: list, boxes: list, radius: float) -> dict:
+    """
+    Smallest (distance from truth centre to box surface - radius) over time.
+
+    `track`  [(stamp, x_map, y_map, yaw_map)]
+    `boxes`  [{'name', 'cx', 'cy', 'yaw', 'sx', 'sy', 't_start', 't_end'}], in
+             map, each measured only while it EXISTED: a box is not an
+             obstacle before it was spawned or after it was removed, and
+             counting those samples would report a clearance against thin air.
+    Returns {'value', 'per_obstacle': {name: value}, 'samples'}. A NEGATIVE
+    value is penetration: the footprint circle overlapped the box.
+
+    The footprint is a circle of `radius`, which is what the costmaps were
+    configured with (nav2_roomba.yaml robot_radius) - not the true square
+    hull. For a differential-drive disc that is the same shape; the number is
+    labelled with the radius it used.
+    """
+    per_obstacle = {}
+    samples = 0
+    for box in boxes:
+        best = None
+        for stamp, x, y, _yaw in track:
+            if stamp < box['t_start'] or stamp > box['t_end']:
+                continue
+            clearance = point_to_box(x, y, box['cx'], box['cy'], box['yaw'],
+                                     box['sx'], box['sy']) - radius
+            samples += 1
+            if best is None or clearance < best:
+                best = clearance
+        per_obstacle[box['name']] = best
+    measured = [value for value in per_obstacle.values() if value is not None]
+    return {'value': min(measured) if measured else None,
+            'per_obstacle': per_obstacle, 'samples': samples}
+
+
+def scan_divergence(scan_samples: list, raw_samples: list,
+                    activation_t: float) -> dict:
+    """
+    Compare /scan against /scan_raw on IDENTICAL header stamps.
+
+    `scan_samples` and `raw_samples` are [((sec, nanosec), ranges)]. The join
+    is EXACT on the stamp key, not pair_nearest: the relay republishes the
+    sensor's own header, so the same sweep carries the same stamp on both
+    topics, and a near-miss pairing would compare two different sweeps and
+    report the robot's motion as degradation.
+
+    Two ranges are equal when both are +inf or when they are bit-for-bit
+    equal. A tolerance would hide exactly the small additive noise the fault
+    injects.
+
+    Returns pairs_compared, pairs_divergent_before_activation (which must be 0
+    for "the streams differ only after activation" to hold - a non-zero value
+    is the measurement, not an error), first_divergent_sim_s,
+    mean_divergent_beam_fraction_after, and the two counts of sweeps that were
+    NOT compared: pairs_unmatched (no /scan_raw entry carries that stamp) and
+    pairs_length_mismatch (a partner was found with a different beam count).
+    Without those, pairs_compared = 40 reads identically whether 40 of 40 or
+    40 of 400 sweeps joined; a non-zero count means the relay or the recorder
+    dropped sweeps, and the comparison covers less than it appears to.
+    """
+    raw_by_stamp = dict(raw_samples)
+    compared = 0
+    unmatched = 0
+    length_mismatch = 0
+    divergent_before = 0
+    first_divergent = None
+    fractions_after = []
+    for key, ranges in sorted(scan_samples, key=lambda item: item[0]):
+        raw = raw_by_stamp.get(key)
+        if raw is None:
+            unmatched += 1
+            continue
+        if len(raw) != len(ranges):
+            length_mismatch += 1
+            continue
+        compared += 1
+        differing = sum(1 for a, b in zip(ranges, raw) if not _same_range(a, b))
+        stamp = key[0] + key[1] * 1e-9
+        if differing:
+            if first_divergent is None or stamp < first_divergent:
+                first_divergent = stamp
+            if stamp < activation_t:
+                divergent_before += 1
+        if stamp >= activation_t:
+            fractions_after.append(differing / len(ranges) if ranges else 0.0)
+    return {
+        'pairs_compared': compared,
+        'pairs_unmatched': unmatched,
+        'pairs_length_mismatch': length_mismatch,
+        'pairs_divergent_before_activation': divergent_before,
+        'first_divergent_sim_s': first_divergent,
+        'mean_divergent_beam_fraction_after':
+            (sum(fractions_after) / len(fractions_after)) if fractions_after else None,
+        'activated_sim_s': activation_t,
+    }
+
+
+def _same_range(a: float, b: float) -> bool:
+    """Equal when both are the no-return marker, or exactly equal."""
+    a_inf = math.isinf(a)
+    b_inf = math.isinf(b)
+    if a_inf or b_inf:
+        return a_inf and b_inf
+    return a == b
+
+
 # -- bag wiring ---------------------------------------------------------------
 
 def _window(track, t0, t1):
@@ -602,6 +746,33 @@ def _mission_window(mission_msgs, run_json):
     return {'t_accept_sim': None, 't_terminal_sim': None,
             'source': refused or (TOPIC_MISSION if mission_msgs else 'none'),
             'final_state': run_json.get('mission_state')}
+
+
+def _nav2_robot_radius(nav2_params_path) -> 'float | None':
+    """
+    robot_radius from the params THIS run used, or None when unreadable.
+
+    The fallback for a run.json written before the pre-flight recorded it.
+    Reads the file env.json names, never a repository copy: a later retune of
+    nav2_roomba.yaml must not change an old run's clearance number. The LARGER
+    of the two costmaps' values, matching run_scenario.read_robot_radius.
+    """
+    if not nav2_params_path:
+        return None
+    try:
+        with open(nav2_params_path) as handle:
+            doc = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    found = []
+    for section in ('global_costmap', 'local_costmap'):
+        params = (doc.get(section) or {}).get(section, {}).get('ros__parameters', {})
+        if isinstance(params, dict) and 'robot_radius' in params:
+            try:
+                found.append(float(params['robot_radius']))
+            except (TypeError, ValueError):
+                return None
+    return max(found) if found else None
 
 
 def write_metrics(run_dir: str) -> dict:
@@ -1145,6 +1316,115 @@ def write_metrics(run_dir: str) -> dict:
             })
         metrics['fault_to_response_s'] = metric(
             entries, 'list of s (sim)', response_source, response_definition)
+
+    # -- obstacle_min_clearance_m ---------------------------------------------
+    clearance_source = (f'{TOPIC_TRUTH} mapped to map by {alignment_source}, against '
+                        'the spawn_obstacle poses run.json records as applied, '
+                        'converted the same way')
+    clearance_definition = (
+        'smallest (distance from the truth position to the surface of an applied '
+        'spawned obstacle, minus the footprint radius the costmaps used) over the '
+        'interval each obstacle EXISTED - from its activated FaultEvent to its '
+        'cleared one, or to the end of the mission window. The obstacle is treated '
+        'as the oriented rectangle it was spawned as; the footprint as a circle of '
+        'robot_radius. A negative value is penetration')
+    radius = (run_json.get('preflight') or {}).get('robot_radius_m')
+    if radius is None:
+        # The same parameter, read from the file this run used, exactly as
+        # plot_run reads xy_goal_tolerance: a radius guessed here would turn
+        # "zero penetration" into an unverifiable claim.
+        radius = _nav2_robot_radius(env.get('nav2_params_path'))
+    applied_boxes = []
+    for entry in run_json.get('interventions', []):
+        if entry.get('type') != 'spawn_obstacle' or entry.get('result') != 'applied':
+            continue
+        pose = entry['params']['pose']
+        size = entry['params']['size']
+        # The obstacle pose is WORLD frame (run.json records pose_frame);
+        # truth is already in map here, so the box is converted the same way.
+        mx, my, myaw = world_pose_to_map(pose['x'], pose['y'], pose['yaw'], wtm)
+        activated = next((ral_stamp(msg) for _, msg in fault_msgs
+                          if msg.id == entry['id']
+                          and msg.state == FaultEvent.STATE_ACTIVATED), None)
+        cleared = next((ral_stamp(msg) for _, msg in fault_msgs
+                        if msg.id == entry['id']
+                        and msg.state == FaultEvent.STATE_CLEARED), None)
+        applied_boxes.append({
+            'name': entry['params']['name'], 'cx': mx, 'cy': my, 'yaw': myaw,
+            'sx': size['x'], 'sy': size['y'],
+            't_start': activated, 't_end': cleared,
+        })
+    unanchored = [box['name'] for box in applied_boxes if box['t_start'] is None]
+    if truth_missing or not have_window:
+        metrics['obstacle_min_clearance_m'] = metric(
+            None, 'm', clearance_source, clearance_definition,
+            truth_missing or no_window)
+    elif not applied_boxes:
+        metrics['obstacle_min_clearance_m'] = metric(
+            None, 'm', clearance_source, clearance_definition,
+            'no spawn_obstacle intervention was applied in this run')
+    elif unanchored:
+        metrics['obstacle_min_clearance_m'] = metric(
+            None, 'm', clearance_source, clearance_definition,
+            f'no activated FaultEvent in the bag for {unanchored}; without the '
+            'activation stamp there is no interval in which the obstacle existed')
+    elif radius is None:
+        metrics['obstacle_min_clearance_m'] = metric(
+            None, 'm', clearance_source, clearance_definition,
+            'no robot_radius available: run.json has no preflight.robot_radius_m and '
+            f'{env.get("nav2_params_path")!r} could not be read for one')
+    else:
+        for box in applied_boxes:
+            if box['t_end'] is None:
+                box['t_end'] = t1
+        clearance = min_clearance(truth_all, applied_boxes, radius)
+        if clearance['value'] is None:
+            metrics['obstacle_min_clearance_m'] = metric(
+                None, 'm', clearance_source, clearance_definition,
+                'no truth sample falls inside any obstacle\'s existence interval')
+        else:
+            metrics['obstacle_min_clearance_m'] = metric(
+                {'value': clearance['value'], 'per_obstacle': clearance['per_obstacle'],
+                 'samples': clearance['samples'], 'robot_radius_m': radius},
+                'm', clearance_source, clearance_definition)
+
+    # -- scan_degradation_divergence ------------------------------------------
+    divergence_source = f'{TOPIC_SCAN} and {TOPIC_SCAN_RAW}, joined on header stamp'
+    divergence_definition = (
+        f'{TOPIC_SCAN} compared against {TOPIC_SCAN_RAW} beam by beam on IDENTICAL '
+        'header stamps - the relay republishes the sensor\'s own header, so an exact '
+        'stamp key is the only join that compares the same sweep. Two ranges are '
+        'equal when both are +inf or exactly equal; no tolerance, which would hide '
+        'the injected noise. pairs_divergent_before_activation must be 0 for "the '
+        'streams differ only after the fault" to hold, and a non-zero value is the '
+        'measurement rather than an error. pairs_unmatched and '
+        'pairs_length_mismatch count the sweeps that were NOT compared - no raw '
+        'entry at that stamp, or a partner with a different beam count - so the '
+        'denominator behind pairs_compared is reported rather than hidden; a '
+        'non-zero count means the relay or the recorder dropped sweeps')
+    scan_missing = _topic_reason(TOPIC_SCAN, status, data[TOPIC_SCAN])
+    raw_missing = _topic_reason(TOPIC_SCAN_RAW, status, data[TOPIC_SCAN_RAW])
+    scan_activation = next(
+        (ral_stamp(msg) for _, msg in fault_msgs
+         if msg.kind == FaultEvent.KIND_SCAN_DEGRADATION
+         and msg.state == FaultEvent.STATE_ACTIVATED), None)
+    if scan_missing or raw_missing:
+        metrics['scan_degradation_divergence'] = metric(
+            None, 'counts and fraction', divergence_source, divergence_definition,
+            scan_missing or raw_missing)
+    elif scan_activation is None:
+        metrics['scan_degradation_divergence'] = metric(
+            None, 'counts and fraction', divergence_source, divergence_definition,
+            'no scan_degradation FaultEvent reached state=activated in this run')
+    else:
+        metrics['scan_degradation_divergence'] = metric(
+            scan_divergence(
+                [((msg.header.stamp.sec, msg.header.stamp.nanosec), list(msg.ranges))
+                 for _, msg in data[TOPIC_SCAN]],
+                [((msg.header.stamp.sec, msg.header.stamp.nanosec), list(msg.ranges))
+                 for _, msg in data[TOPIC_SCAN_RAW]],
+                scan_activation),
+            'counts and fraction', divergence_source, divergence_definition)
 
     payload = {
         'meta': {
