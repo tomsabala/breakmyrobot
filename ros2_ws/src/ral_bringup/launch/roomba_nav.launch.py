@@ -13,19 +13,26 @@
 # limitations under the License.
 
 """
-Bring up the full navigation stack: sim, scan relay, AMCL and Nav2.
+Bring up the full navigation stack: sim, fault injection, AMCL and Nav2.
 
 What runs
 ---------
   * roomba_sim.launch.py - gz, the ROS/gz bridge, robot_state_publisher and
     ral_eval's ground_truth_node (evaluation only, no TF).
-  * ral_faults/scan_fault_relay - the sole publisher of /scan. AMCL and both
-    costmaps read it; Phase 4.2 degrades it at this boundary.
+  * faults.launch.py - ral_faults/scan_fault_relay (the sole publisher of
+    /scan, and where lidar degradation is injected), ral_faults/fault_manager
+    (every /faults/* service, the FaultEvent lifecycle and /faults/active) and
+    a second parameter_bridge, ros_gz_fault_bridge, carrying the gz create,
+    remove, set_pose services and the two wrench topics.
   * nav2_bringup/bringup_launch.py with ral_bringup/config/nav2_roomba.yaml -
     map_server, AMCL, the planner, DWB, the behaviours, the BT navigator and
     the velocity smoother that actually publishes /cmd_vel.
   * a static, DISPLAY-ONLY map -> world transform derived from the measured
     alignment (see below).
+
+`robot` and `seed` exist for the fault layer: `robot` selects the capability
+row and the gz model a fault addresses, `seed` is the scenario's and governs
+the scan relay's RNG. The scenario runner passes both from the scenario file.
 
 The three map artifacts are a MATCHED SET: maps/apartment.pgm,
 maps/apartment.yaml and maps/apartment_frames.yaml. The alignment belongs to
@@ -106,12 +113,23 @@ def generate_launch_description() -> LaunchDescription:
     nav2_share = get_package_share_directory('nav2_bringup')
 
     world = LaunchConfiguration('world')
+    robot = LaunchConfiguration('robot')
+    seed = LaunchConfiguration('seed')
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'world', default_value='ral_apartment',
             description='World name: selects the SDF, the bridge config and the '
                         'truth frame name together.'),
+        DeclareLaunchArgument(
+            'robot', default_value='roomba',
+            description='Robot key in ral_faults/config/capabilities.yaml: decides '
+                        'which faults the manager will apply and which gz model they '
+                        'address.'),
+        DeclareLaunchArgument(
+            'seed', default_value='1',
+            description="The scenario's seed, forwarded to scan_fault_relay's RNG. "
+                        'It governs the lidar noise and dropout only.'),
         DeclareLaunchArgument(
             'map', default_value=os.path.join(bringup_share, 'maps', 'apartment.yaml'),
             description='Static map. Its <map>_frames.yaml alignment must have been '
@@ -140,12 +158,14 @@ def generate_launch_description() -> LaunchDescription:
                 os.path.join(bringup_share, 'launch', 'roomba_sim.launch.py')),
             launch_arguments={'world': world}.items()),
 
-        Node(
-            package='ral_faults',
-            executable='scan_fault_relay',
-            name='scan_fault_relay',
-            parameters=[{'use_sim_time': True}],
-            output='screen'),
+        # Fault injection: the scan relay (sole publisher of /scan), the fault
+        # manager and the gz interfaces the faults are applied through. The
+        # relay used to be declared here; it moved so that everything taking
+        # the scenario's seed and robot lives in one file.
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(bringup_share, 'launch', 'faults.launch.py')),
+            launch_arguments={'world': world, 'robot': robot, 'seed': seed}.items()),
 
         # Nav2 activates its costmaps as soon as it starts. If gz has not yet
         # published /clock and the bridge has not yet published
