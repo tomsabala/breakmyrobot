@@ -23,7 +23,10 @@ the verdict.
 
 The YAML is read by SOURCE path, as test_fault_catalogue.py does: no ament
 index, so no installed share directory is needed, and no rclpy, so these run
-in any build.
+in any build. The robot profiles live in ral_bringup, two directories up -
+read directly rather than through a <test_depend>, because ral_bringup
+exec_depends this package and colcon would see the reverse edge as a cycle.
+test_bridge_contract.py reads this package's own source tree the same way.
 """
 
 import math
@@ -31,55 +34,68 @@ import os
 
 from ral_faults.catalogue import (
     check_params,
-    load_capabilities,
     load_catalogue,
-    model_of,
-    supports,
     target_for,
 )
+from ral_eval.robot_profile import load_profile, profile_path, supports
 
 import pytest
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           'config')
-CAPABILITIES = load_capabilities(os.path.join(CONFIG_DIR, 'capabilities.yaml'))
+BRINGUP_SHARE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    'ral_bringup')
 CATALOGUE = load_catalogue(os.path.join(CONFIG_DIR, 'fault_catalogue.yaml'))
+ROOMBA = load_profile(profile_path(BRINGUP_SHARE, 'roomba'))
+CAR = load_profile(profile_path(BRINGUP_SHARE, 'car'))
 
 
 def test_a_supported_fault_is_not_refused():
-    assert supports(CAPABILITIES, 'roomba', 'kidnap') is None
-    assert supports(CAPABILITIES, 'roomba', 'scan_degradation') is None
+    assert supports(ROOMBA, 'kidnap') is None
+    assert supports(ROOMBA, 'scan_degradation') is None
+    assert supports(CAR, 'kidnap') is None
 
 
-def test_an_unsupported_fault_refuses_with_the_files_own_reason_verbatim():
+def test_an_unsupported_fault_refuses_with_the_profiles_own_reason_verbatim():
     """That string is what the FaultEvent and the service reply carry."""
-    stated = CAPABILITIES['car']['unsupported']['scan_degradation']
-    assert supports(CAPABILITIES, 'car', 'scan_degradation') == stated
+    stated = CAR['unsupported']['scan_degradation']
+    assert supports(CAR, 'scan_degradation') == stated
     assert 'ArduRover' in stated
-
-
-def test_an_undeclared_robot_is_refused_by_name():
-    reason = supports(CAPABILITIES, 'drone', 'kidnap')
-    assert reason is not None
-    assert 'capabilities.yaml' in reason
-    assert "'car'" in reason and "'roomba'" in reason
 
 
 def test_a_kind_absent_with_no_stated_reason_still_refuses():
     """Silence in the table is not consent."""
-    table = {'forklift': {'model': 'ral_forklift', 'faults': ['kidnap'],
-                          'unsupported': {}}}
-    reason = supports(table, 'forklift', 'mobility_fault')
+    reason = supports(CAR, 'mast_collapse')
     assert reason is not None
-    assert 'mobility_fault is not listed under forklift' in reason
-    assert 'no reason is recorded' in reason
+    assert 'mast_collapse is not listed under car' in reason
+    assert 'car.yaml' in reason
+    assert 'silence in the table is not consent' in reason
 
 
-def test_an_unknown_robot_or_target_rule_raises_naming_the_file():
-    with pytest.raises(ValueError) as unknown_robot:
-        model_of(CAPABILITIES, 'drone')
-    assert 'capabilities.yaml' in str(unknown_robot.value)
+def test_a_profile_whose_robot_key_disagrees_with_its_stem_raises(tmp_path):
+    """Callers look a profile up by stem; a disagreement addresses two robots."""
+    source = profile_path(BRINGUP_SHARE, 'car')
+    with open(source) as handle:
+        text = handle.read()
+    forged = tmp_path / 'roomba.yaml'
+    forged.write_text(text)
+    with pytest.raises(ValueError) as mismatch:
+        load_profile(str(forged))
+    assert "'car'" in str(mismatch.value)
+    assert "'roomba'" in str(mismatch.value)
 
+
+def test_a_profile_missing_a_required_key_raises_naming_it(tmp_path):
+    forged = tmp_path / 'car.yaml'
+    forged.write_text('robot: car\nmodel: ral_car\n')
+    with pytest.raises(ValueError) as missing:
+        load_profile(str(forged))
+    assert 'is missing' in str(missing.value)
+    assert 'estimate' in str(missing.value)
+
+
+def test_an_unknown_target_rule_raises_naming_the_catalogue():
     broken = {'spawn_obstacle': dict(CATALOGUE['spawn_obstacle'],
                                      target_rule='whatever')}
     with pytest.raises(ValueError) as unknown_rule:

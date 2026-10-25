@@ -10,7 +10,7 @@
     the sole publisher of /scan and degrades it in place; fault_manager serves
     every /faults/* service, owns the requested/activated/rejected/cleared
     lifecycle on /fault_events and the latched /faults/active snapshot, and
-    gates every request against this package's own config/capabilities.yaml.
+    gates every request against the robot profile it is launched with.
   </description>
   <maintainer email="noreply@example.com">Resilient Autonomy Lab</maintainer>
   <license>Apache-2.0</license>
@@ -25,12 +25,16 @@
        nav_msgs is the ground-truth Odometry the body-frame wrench is
        projected with; geometry_msgs is the Pose/Vector3 the spawn and
        teleport requests carry; ament_index_python and python3-yaml resolve
-       and read THIS package's own config/fault_catalogue.yaml and
-       config/capabilities.yaml (catalogue.py), installed into its share
-       directory by setup.py. The files live here, with their only code
-       reader: resolving another package's share directory at runtime is a
-       runtime dependency on it, and that edge cannot be declared because
-       ral_bringup already exec_depends ral_faults. -->
+       and read THIS package's own config/fault_catalogue.yaml
+       (catalogue.py), installed into its share directory by setup.py. That
+       file lives here, with its only code reader: resolving another
+       package's share directory at runtime is a runtime dependency on it,
+       and that edge cannot be declared because ral_bringup already
+       exec_depends ral_faults. The ROBOT PROFILE
+       (ral_bringup/config/robots/<robot>.yaml, read by robot_profile.py) is
+       the same rule seen from the other side: it belongs to ral_bringup, so
+       its path is supplied by the launch file as a parameter and is never
+       resolved from here. -->
   <exec_depend>ral_interfaces</exec_depend>
   <exec_depend>ros_gz_interfaces</exec_depend>
   <exec_depend>std_srvs</exec_depend>
@@ -39,10 +43,17 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
 
-  <!-- test_fault_catalogue.py pins this package's config/ against
-       ral_eval's DISPATCH table, injection_point, _target_of and
-       INTERVENTION_PARAM_RANGES. ral_eval depends on neither ral_faults nor
-       ral_bringup, so this test edge is one-way and acyclic. -->
+  <!-- ral_eval hosts robot_profile.py, which fault_manager imports at
+       runtime, and test_fault_catalogue.py pins this package's config/
+       against ral_eval's DISPATCH table, injection_point, _target_of and
+       INTERVENTION_PARAM_RANGES. The loader lives there rather than here
+       because ral_bringup exec_depends both packages while ral_eval depends
+       on neither: hosting it here would need ral_eval -> ral_faults, which
+       closes the cycle colcon refuses to order. -->
+  <exec_depend>ral_eval</exec_depend>
+  <!-- Declared as well as exec_depended: test_fault_catalogue.py imports
+       ral_eval.run_scenario directly, so the test dependency exists whether
+       or not it is written down. -->
   <test_depend>ral_eval</test_depend>
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -13,22 +13,30 @@
 # limitations under the License.
 
 """
-The only reader of fault_catalogue.yaml and capabilities.yaml.
+The only reader of fault_catalogue.yaml.
 
-Both files live in this package's own config/ and are resolved through its
+The file lives in this package's own config/ and is resolved through its
 share directory, so a node reads the installed copy that belongs to the build
 it is running - never a path relative to a source tree that may not exist in
-the container. They live HERE, in the package whose code reads them: resolving
+the container. It lives HERE, in the package whose code reads it: resolving
 another package's share directory at runtime is a runtime dependency on it,
 and that edge cannot be declared, because ral_bringup already exec_depends
 ral_faults and colcon refuses a cycle.
 
+What a ROBOT is - its gz model, its faults, its estimate, its plant limits -
+is NOT here. It is in ral_bringup/config/robots/<robot>.yaml, read by
+ral_eval/ral_eval/robot_profile.py, whose path a caller supplies. The loader
+sits in ral_eval, not in this package, because ral_faults already depends on
+ral_eval (package.xml declares both an exec_depend and a test_depend) while
+ral_eval depends on neither ral_faults nor ral_bringup: hosting it here would
+need ral_eval -> ral_faults and close a cycle. This file describes the fault
+VOCABULARY, which is platform-independent; the profile describes one platform.
+
 Every lookup here RAISES on a missing key rather than defaulting. A fault kind
-absent from the catalogue, or a robot absent from the capability table, is a
-configuration error: defaulting would either publish a FaultEvent whose
-injection_point is a guess, or let a platform be subjected to a fault nobody
-declared it supports. The refusal idiom is run_scenario.read_robot_radius's
-(:835-857): name the file and the missing key, and do not guess.
+absent from the catalogue is a configuration error: defaulting would publish a
+FaultEvent whose injection_point is a guess. The refusal idiom is
+robot_profile.load_profile's: name the file and the missing key, and do not
+guess.
 """
 
 import math
@@ -39,7 +47,6 @@ from ament_index_python.packages import get_package_share_directory
 import yaml
 
 CATALOGUE_FILE = 'fault_catalogue.yaml'
-CAPABILITIES_FILE = 'capabilities.yaml'
 
 
 def config_path(filename: str) -> str:
@@ -123,72 +130,6 @@ def kind_entry(catalogue: dict, kind: str) -> dict:
         raise ValueError(
             f'{kind!r} is not in the fault catalogue; known kinds are '
             f'{sorted(catalogue)}') from None
-
-
-def load_capabilities(path: str = '') -> dict:
-    """
-    Return {robot: {'model', 'faults', 'unsupported'}} from capabilities.yaml.
-
-    `unsupported` is normalised to a dict so callers never have to handle its
-    absence; `model` and `faults` are required, because the manager addresses
-    gz by model name and gates every request on the fault list.
-    """
-    resolved = path or config_path(CAPABILITIES_FILE)
-    doc = _load_yaml(resolved)
-    table = {}
-    for robot, entry in doc.items():
-        if not isinstance(entry, dict):
-            raise ValueError(f'{resolved}: robot {robot!r} is not a mapping')
-        if 'model' not in entry:
-            raise ValueError(f'{resolved}: robot {robot!r} has no `model`; the fault '
-                             'manager addresses gz entities by model name and will '
-                             'not guess one')
-        faults = entry.get('faults')
-        if not isinstance(faults, list):
-            raise ValueError(f'{resolved}: robot {robot!r} has no `faults` list; an '
-                             'absent list is not "supports everything"')
-        table[robot] = {
-            'model': str(entry['model']),
-            'faults': [str(kind) for kind in faults],
-            'unsupported': dict(entry.get('unsupported') or {}),
-        }
-    if not table:
-        raise ValueError(f'{resolved} declares no robots')
-    return table
-
-
-def supports(capabilities: dict, robot: str, kind: str) -> 'str | None':
-    """
-    None when `robot` supports `kind`; otherwise the refusal reason.
-
-    The reason comes VERBATIM from the robot's `unsupported` block when it has
-    one - that text is written for an operator and is what the FaultEvent and
-    the service reply carry. A kind that is simply absent from the list, with
-    no stated reason, still refuses: the table is the declaration, and silence
-    in it is not consent.
-    """
-    entry = capabilities.get(robot)
-    if entry is None:
-        return (f'robot {robot!r} is not in capabilities.yaml (known: '
-                f'{sorted(capabilities)}); no fault can be gated for a platform '
-                'whose capabilities are undeclared')
-    if kind in entry['faults']:
-        return None
-    stated = entry['unsupported'].get(kind)
-    if stated:
-        return str(stated)
-    return (f'{kind} is not listed under {robot} in capabilities.yaml, and no '
-            'reason is recorded there; an undeclared fault is refused rather '
-            'than attempted')
-
-
-def model_of(capabilities: dict, robot: str) -> str:
-    """Return the gz model name for `robot`, or raise naming the file."""
-    entry = capabilities.get(robot)
-    if entry is None:
-        raise ValueError(f'robot {robot!r} is not in capabilities.yaml; known robots '
-                         f'are {sorted(capabilities)}')
-    return entry['model']
 
 
 def target_for(catalogue: dict, kind: str, params: dict, model: str) -> str:

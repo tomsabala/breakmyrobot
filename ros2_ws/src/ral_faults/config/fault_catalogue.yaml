@@ -36,7 +36,8 @@
 #   target_rule     how FaultEvent.target is derived, reproducing
 #                   run_scenario._target_of: `params.name` (the entity the
 #                   request names), `literal:<topic>` (a fixed stream), or
-#                   `model` (the robot's gz model name, from capabilities.yaml).
+#                   `model` (the robot's gz model name, which comes from
+#                   ral_bringup/config/robots/<robot>.yaml).
 #   lifetime        keyed_set  many instances may be in force at once, keyed by
 #                              the entity name
 #                   singleton  at most one in force; re-enabling SUPERSEDES
@@ -57,7 +58,7 @@
 #                   for unbounded on that side. REQUIRED, including as an
 #                   empty block: an absent block in this project means
 #                   "undeclared", not "unbounded" (the `faults:` list idiom in
-#                   capabilities.yaml). ral_faults/catalogue.py:check_params
+#                   a robot profile). ral_faults/catalogue.py:check_params
 #                   refuses a request outside a declared range, and refuses a
 #                   NaN or infinite value for EVERY field of every kind - so
 #                   an empty block still means finiteness is checked. The
@@ -124,16 +125,16 @@ faults:
     lifetime: singleton
     cleared_by: self_disable
     alters_truth: true
+    # The measured deficit ladder is NOT here: what a wrench does depends on
+    # the plant it is applied to, so each robot profile carries its own
+    # `mobility_note` and the manager publishes it verbatim beside this one.
     honesty_note: >-
-      An external wrench on the base link, not a degraded actuator. DiffDrive
-      commands wheel-joint velocities, so the wrench changes motion only once
-      it exceeds what the wheels can absorb - MEASURED on this plant at a
-      commanded 0.400 m/s: -15 N and -30 N produce no deficit at all, -60 N
-      produces 25% and pushes the body backwards, -120 N produces 90%.
-      force_x_n/force_y_n are BODY-frame and are re-projected into the world
-      frame, the only frame ApplyLinkWrench accepts. `activated` means the
-      wrench was published with the gz bridge subscribed; gz acknowledges
-      nothing.
+      An external wrench on the base link, not a degraded actuator. The
+      drivetrain commands joint velocities, so the wrench changes motion only
+      once it exceeds what the wheels can absorb. force_x_n/force_y_n are
+      BODY-frame and are re-projected into the world frame, the only frame
+      ApplyLinkWrench accepts. `activated` means the wrench was published with
+      the gz bridge subscribed; gz acknowledges nothing.
     # Deliberately no bounds: any FINITE wrench is one gz can apply, and an
     # implausibly large one is a visible result rather than an invalid
     # request. check_params still refuses NaN and infinity.

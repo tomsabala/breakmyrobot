@@ -26,10 +26,11 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # fault_catalogue.yaml and capabilities.yaml are RUNTIME INPUTS
-        # resolved through the share directory (ral_faults/catalogue.py), so
-        # a node reads the installed copy belonging to the build it runs, not
-        # a source path that may not exist in the container.
+        # fault_catalogue.yaml is a RUNTIME INPUT resolved through the share
+        # directory (ral_faults/catalogue.py), so a node reads the installed
+        # copy belonging to the build it runs, not a source path that may not
+        # exist in the container. The robot profile is NOT here: it belongs to
+        # ral_bringup, and its path arrives as a launch parameter.
         ('share/' + package_name + '/config', glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
