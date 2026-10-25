@@ -46,6 +46,14 @@ from datetime import datetime, timezone
 EXIT_OK = 0
 EXIT_TOO_FEW_RUNS = 2
 
+# The metrics.json schema this report reads. Its source is METRICS_VERSION in
+# ral_eval/metrics.py; this script cannot import it (it runs from /ws/scripts
+# against runs produced by any build), so it names the number and refuses a
+# run that does not carry it. A v3 file, for instance, has no
+# scan_degradation_divergence.pairs_unmatched at all, and an absent key is
+# indistinguishable from a measured zero.
+METRICS_VERSION_SUPPORTED = 4
+
 # The metrics reported per run. `nav2_result` is rendered from its {code, name}.
 PER_RUN_METRICS = ('mission_duration_s', 'path_length_m', 'goal_pose_error_m',
                    'est_error_mean_m', 'est_error_at_start_pose_m',
@@ -102,6 +110,13 @@ def _load_runs(runs_dir: str, experiment_id: str, count: int) -> 'tuple[list, st
 
 def _same_across_runs(runs: list, experiment_id: str) -> str:
     """'' when the runs are comparable, else what differs."""
+    for run in runs:
+        found = run['metrics']['meta'].get('metrics_version')
+        if found != METRICS_VERSION_SUPPORTED:
+            return (f'{run["name"]}: metrics.json meta.metrics_version is {found!r}, '
+                    f'not {METRICS_VERSION_SUPPORTED}; this report reads keys that '
+                    'version defines, and a mismatch is a silently different '
+                    'measurement')
     for run in runs:
         found = run['metrics']['meta'].get('experiment_id')
         if found != experiment_id:

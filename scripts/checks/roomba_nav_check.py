@@ -165,6 +165,14 @@ NAV_NODE_PATTERNS = ('amcl', 'controller_server', 'planner_server', 'bt_navigato
                      'costmap', 'velocity_smoother', 'slam_toolbox', 'behavior_server',
                      'smoother_server', 'waypoint_follower')
 
+# The ONLY nodes allowed to subscribe to simulator truth. `roomba_nav_check`
+# is this harness, which measures the residual between truth and the estimate;
+# `fault_manager` is the fault INJECTOR, which reads truth to project a
+# body-frame wrench into the world frame gz requires and tells the robot
+# nothing. A nav-pattern match is the loud failure, but anything outside this
+# list is a new truth consumer nobody declared, so check 4 fails on it too.
+TRUTH_SUBSCRIBER_ALLOWLIST = ('roomba_nav_check', 'fault_manager')
+
 BRINGUP_WALL_LIMIT = 90.0      # s wall, guards a stack that never comes up
 AMCL_CONVERGE_SIM = 30.0       # s sim allowed for the filter to converge
 # AMCL updates its filter on motion, not on time. The harness therefore rotates
@@ -539,14 +547,22 @@ def main() -> int:
                        f"frame_id '{raw.header.frame_id}' -> '{relayed.header.frame_id}', "
                        f'element-for-element identical = {identical}')
 
-            # -- 4. Truth is consumed by nobody in the nav path ------------------
+            # -- 4. Truth is consumed by the harness and the injector only -------
+            # An allowlist, not just a nav-pattern scan: `fault_manager`
+            # joined /ground_truth/odom and passed silently under the old
+            # check, and so would any future truth subscriber. The manager's
+            # read is legitimate - it projects the body-frame wrench - but
+            # that exception is asserted here rather than assumed.
             truth_subs = node.get_subscriptions_info_by_topic('/ground_truth/odom')
             truth_sub_names = sorted(sub.node_name for sub in truth_subs)
             offenders = [name for name in truth_sub_names
                          if any(pattern in name for pattern in NAV_NODE_PATTERNS)]
-            record(4, 'no navigation component subscribes to truth', not offenders,
+            unexpected = [name for name in truth_sub_names
+                          if name not in TRUTH_SUBSCRIBER_ALLOWLIST]
+            record(4, 'only the harness and the fault injector subscribe to truth',
+                   not offenders and not unexpected,
                    f'/ground_truth/odom subscribers = {truth_sub_names}; navigation '
-                   f'offenders = {offenders}')
+                   f'offenders = {offenders}; not allowlisted = {unexpected}')
 
             # -- localize, then assert TF and the residual -----------------------
             # Ordering matters twice over:
@@ -809,14 +825,21 @@ def main() -> int:
         '- The estimate is an estimate: AMCL\'s pose differs from truth at every',
         '  sample, but stays localized (check 11). Equality would mean truth had',
         '  leaked into localization.',
-        '- `/scan` has exactly one publisher, `scan_fault_relay`, and its output is',
-        '  byte-identical to `/scan_raw` (checks 2, 3). Phase 4.2 injects sensor',
-        '  degradation at that node, so every lidar consumer — AMCL and both',
+        '- `/scan` has exactly one publisher, `scan_fault_relay`, and with',
+        '  degradation OFF its output is byte-identical to `/scan_raw`',
+        '  (checks 2, 3). This harness injects no fault, so check 3 asserts the',
+        '  relay\'s DISABLED pass-through: the clean stream every non-fault run',
+        '  is compared against. The same node applies lidar degradation when the',
+        '  fault manager tells it to, so every lidar consumer — AMCL and both',
         '  costmaps — is downstream of the fault by construction.',
-        '- No navigation component subscribes to `/ground_truth/odom` (check 4),',
-        '  and the complete TF frame set is asserted (check 5), so truth bridged',
-        '  onto `/tf` under any name — including the simulator\'s own',
-        '  `<world> -> <model>` names — fails the check.',
+        '- The only subscribers to `/ground_truth/odom` are this harness and',
+        '  `fault_manager` (check 4): no navigation component reads truth, and',
+        '  the one legitimate exception — the fault injector, which projects a',
+        '  body-frame wrench into the world frame and tells the robot nothing —',
+        '  is on an allowlist, so a new truth consumer fails the check instead',
+        '  of passing unnoticed. The complete TF frame set is asserted too',
+        '  (check 5), so truth bridged onto `/tf` under any name — including',
+        '  the simulator\'s own `<world> -> <model>` names — fails as well.',
         '- The commands the plant received reached the envelope Nav2 is',
         '  configured for and did not exceed it (check 12, two-sided on linear',
         '  speed). The lower bound is the load-bearing half: `velocity_smoother`',
@@ -858,12 +881,16 @@ def main() -> int:
         '  measured frame alignment so RViz can draw truth on the map; no',
         '  navigation component reads it, and Phase 3\'s metrics must read',
         '  `maps/apartment_frames.yaml` directly rather than listening to it.',
-        '- **No fault is exercised.** Scan degradation, obstacle spawning,',
-        '  communication loss and kidnapping are Phase 4. Nothing here shows how',
-        '  the stack behaves when a subsystem is broken.',
         '- **One robot, one world, one goal.** The car-like platform is Phase 5,',
         '  and the MVP\'s "Roomba passes, car does not" scenario depends on the',
         '  same 0.70 m doorway measured in check 9.',
+        '- **This harness exercises no fault.** It runs a fault-free mission on',
+        '  purpose: it is the control the fault runs are read against, and',
+        '  check 3\'s byte-identical `/scan` holds only while degradation is off.',
+        '  The fault evidence lives in the Phase 4 scenario runs',
+        '  (`obstacle_roomba`, `scan_degraded_roomba`, `mobility_fault_roomba`,',
+        '  `kidnap_roomba`, `blocked_goal_roomba`), each with its own',
+        '  `metrics.json` and `plot.png` under `runs/`.',
         '',
     ]
     doc_path = os.path.join(args.repo_root, 'docs', 'nav-closed-loop.md')
