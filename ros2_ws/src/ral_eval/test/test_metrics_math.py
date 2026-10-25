@@ -29,7 +29,9 @@ from ral_eval.metrics import (
     RESPONSE_HORIZON_S,
     central_difference,
     debounce_events,
+    estimate_track,
     first_response,
+    first_response_mavros,
     metric,
     min_clearance,
     moving_average,
@@ -46,10 +48,15 @@ from ral_eval.metrics import (
 
 import pytest
 
+# The two plants these cases are written against, named rather than repeated:
+# the Roomba's DiffDrive maximum and the car's configured cruise speed.
+ROOMBA_MAX_LINEAR = 0.46
+CAR_MAX_LINEAR = 1.0
+
 
 def test_path_length_of_a_straight_metre_at_50_hz():
     track = [(index * 0.02, index * 0.02, 0.0) for index in range(51)]
-    walked = path_length(track)
+    walked = path_length(track, ROOMBA_MAX_LINEAR)
     assert abs(walked['length'] - 1.0) < 1e-9, walked
     assert walked['excluded'] == 0.0
 
@@ -60,7 +67,7 @@ def test_a_teleport_is_excluded_and_reported_not_counted_as_travel():
     jump_t = track[-1][0] + 0.02
     track.append((jump_t, track[-1][1] + 4.0, 0.0))                      # the teleport
     track += [(jump_t + 0.02 * k, track[-1][1] + 0.02 * k, 0.0) for k in range(1, 26)]
-    walked = path_length(track)
+    walked = path_length(track, ROOMBA_MAX_LINEAR)
     assert abs(walked['length'] - 1.0) < 1e-9, walked
     assert abs(walked['excluded'] - 4.0) < 1e-9, walked
     assert walked['excluded_steps'] == 1
@@ -206,7 +213,8 @@ def test_stopped_time_is_unknown_when_no_command_precedes_the_window():
 def test_path_length_refuses_a_track_whose_stamps_decrease():
     """A negative dt collapses the limit and sheds real travel into teleports."""
     with pytest.raises(ValueError):
-        path_length([(0.0, 0.0, 0.0), (1.0, 0.1, 0.0), (0.5, 0.2, 0.0)])
+        path_length([(0.0, 0.0, 0.0), (1.0, 0.1, 0.0), (0.5, 0.2, 0.0)],
+                    ROOMBA_MAX_LINEAR)
 
 
 def test_central_difference_and_smoothing_recover_a_constant_speed():
@@ -243,7 +251,7 @@ def test_resampling_outside_the_sampled_interval_is_none_not_an_extrapolation():
 
 
 def test_path_length_of_an_empty_track_is_zero_with_the_sample_count_reported():
-    walked = path_length([])
+    walked = path_length([], ROOMBA_MAX_LINEAR)
     assert walked['length'] == 0.0 and walked['samples'] == 0
 
 
@@ -347,3 +355,91 @@ def test_scan_divergence_treats_two_no_returns_as_equal_and_inf_against_a_range_
     assert identical['mean_divergent_beam_fraction_after'] == 0.0
     blanked = scan_divergence([((1, 0), [inf, 1.0])], [((1, 0), [3.0, 1.0])], 0.0)
     assert abs(blanked['mean_divergent_beam_fraction_after'] - 0.5) < 1e-12
+
+
+class _Inner:
+    """msg.pose.pose, the shape PoseWithCovarianceStamped and Odometry share."""
+
+    def __init__(self, x, y):
+        self.position = type('Point', (), {'x': x, 'y': y})()
+
+
+class _Outer:
+    def __init__(self, x, y):
+        self.pose = _Inner(x, y)
+
+
+class _EstimateMsg:
+    def __init__(self, x, y):
+        self.pose = _Outer(x, y)
+
+
+def test_estimate_track_composes_through_two_rotations_not_two_offsets():
+    """
+    An ekf_local pose reaches `map` through TWO rotations, not two additions.
+
+    The ekf_local origin sits at (2, 1) in `world`, rotated a quarter turn,
+    and `map` sits at (1, 1) in `world`, rotated a quarter turn as well. An
+    estimate 1 m ahead along ekf_local's x is therefore 1 m along world's y,
+    i.e. world (2, 2), and that is map (1, -1). An implementation that adds
+    the two offsets without rotating gets (2, 0) - a different place, and one
+    that would be reported as a metre of localization error.
+    """
+    wtl = (2.0, 1.0, math.pi / 2.0)
+    wtm = (1.0, 1.0, math.pi / 2.0)
+    track = estimate_track([(7.0, _EstimateMsg(1.0, 0.0))], 'ekf_local', wtm, wtl)
+    assert len(track) == 1, track
+    stamp, x, y = track[0]
+    assert stamp == 7.0
+    assert abs(x - 1.0) < 1e-12, track
+    assert abs(y + 1.0) < 1e-12, track
+
+
+def test_estimate_track_leaves_an_estimate_already_in_map_alone():
+    """A `map` estimate is not composed with anything, measured or not."""
+    track = estimate_track([(1.0, _EstimateMsg(3.0, 4.0))], 'map',
+                           (1.0, 1.0, math.pi / 2.0), None)
+    assert track == [(1.0, 3.0, 4.0)]
+
+
+def test_estimate_track_refuses_a_child_frame_with_no_measured_alignment():
+    """Scoring it as `map` would publish the frame offset as estimate error."""
+    with pytest.raises(ValueError):
+        estimate_track([(1.0, _EstimateMsg(0.0, 0.0))], 'ekf_local',
+                       (0.0, 0.0, 0.0), None)
+
+
+def test_first_response_mavros_prefers_the_earlier_mode_change():
+    """The autopilot's own mode change is an event; the speed change is later."""
+    modes = [(9.0, 'GUIDED'), (10.5, 'HOLD')]
+    speeds = [(8.0, 1.0), (9.0, 1.0), (10.0, 1.0), (11.5, 0.0)]
+    found = first_response_mavros(10.0, modes, speeds)
+    assert found['trigger'] == 'mode_changed', found
+    assert abs(found['delta_s'] - 0.5) < 1e-9, found
+    assert found['mode_at_activation'] == 'GUIDED'
+    # The speed trigger was still calibrated, and says so.
+    assert abs(found['speed_threshold_m_s'] - 0.05) < 1e-12, found
+    assert found['speed_baseline_samples'] == 3
+
+
+def test_first_response_mavros_skips_the_speed_trigger_without_a_baseline():
+    """One sample before the activation is no null hypothesis to test against."""
+    found = first_response_mavros(10.0, [], [(10.0, 1.0), (10.5, 0.0)])
+    assert found['trigger'] is None, found
+    assert found['speed_threshold_m_s'] is None, found
+    assert 'skipped' in found['reason'], found['reason']
+
+
+def test_path_length_keeps_for_the_car_a_step_it_excludes_for_the_roomba():
+    """
+    The teleport limit is 3x THIS plant's maximum, so it moves with the robot.
+
+    1.0 m in 0.5 s is 2.0 m/s: beyond 3 x 0.46 for the Roomba, well inside
+    3 x 1.0 for the car. A module constant would call the same metre a
+    teleport on one platform and travel on the other and report both as fact.
+    """
+    track = [(0.0, 0.0, 0.0), (0.5, 1.0, 0.0)]
+    roomba = path_length(track, ROOMBA_MAX_LINEAR)
+    car = path_length(track, CAR_MAX_LINEAR)
+    assert roomba['length'] == 0.0 and abs(roomba['excluded'] - 1.0) < 1e-12, roomba
+    assert abs(car['length'] - 1.0) < 1e-12 and car['excluded'] == 0.0, car

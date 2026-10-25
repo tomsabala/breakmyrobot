@@ -20,19 +20,28 @@ Panels
   A (top left)     the map frame: occupancy grid, truth and estimate
                    trajectories, the last plan, start, goal and its tolerance
                    circle, spawned obstacles, fault activation markers.
-  B (top right)    |AMCL - truth| against sim time over the mission window,
-                   with the measured RESIDUAL AT THE START POSE drawn as a
-                   dashed line - map plus alignment error at that one pose,
-                   which is a scale to read the curve against and NOT a lower
-                   bound; in-mission error below it is normal.
-  C (bottom left)  commanded versus achieved velocity. This is the panel
-                   Phase 4.3's mobility fault is read from.
+  B (top right)    |estimate - truth| against sim time over the mission
+                   window, with the measured RESIDUAL AT THE START POSE drawn
+                   as a dashed line - map plus alignment error at that one
+                   pose, which is a scale to read the curve against and NOT a
+                   lower bound; in-mission error below it is normal.
+  C (bottom left)  commanded versus achieved velocity, for a platform
+                   commanded in velocity; achieved speed against the
+                   configured cruise speed for one commanded by position
+                   setpoint. This is the panel Phase 4.3's mobility fault is
+                   read from.
   D (bottom right) the event timeline: mission states, fault events,
                    recoveries, plan publications.
 
 B, C and D share the sim-time axis. A panel with no data is drawn EMPTY with
 the reason written in it: a missing panel looks like an oversight, an empty
 one labelled "no data: ..." is evidence.
+
+Which topics are read, what the estimate IS and what the command IS come from
+the ROBOT PROFILE the run copied into env.json, through metrics.read_topics -
+not from a list here. A second copy of that list would let the figure read a
+stream metrics.json did not score, and the two artifacts of one run would be
+able to disagree.
 
 Every series here is recomputed from the same bag over the same window as
 metrics.json, through the same functions, so the figure and the JSON cannot
@@ -50,24 +59,22 @@ import sys
 import matplotlib
 from ral_eval.bagio import ral_stamp, read_bag, stamp_of, truth_track
 from ral_eval.frames import world_pose_to_map
+from ral_eval.grid import grid_from_pgm
 from ral_eval.metrics import (
     RESAMPLE_HZ,
     SMOOTH_SAMPLES,
     STAMP_MATCH_S,
     TOPIC_ACTION_FEEDBACK,
-    TOPIC_AMCL,
-    TOPIC_CMD,
     TOPIC_FAULTS,
     TOPIC_MAP,
     TOPIC_MISSION,
     TOPIC_PLAN,
     TOPIC_TRUTH,
-    central_difference,
-    moving_average,
+    achieved_velocity,
+    estimate_track,
     pair_nearest,
-    resample_linear,
+    read_topics,
     resample_zoh,
-    unwrap_angles,
 )
 
 import numpy as np
@@ -77,16 +84,18 @@ import yaml
 matplotlib.use('Agg')                                   # no display in the container
 import matplotlib.pyplot as plt                         # noqa: E402 - after use('Agg')
 
-# ral.rviz: truth 255;0;0, AMCL 0;170;255, plan 0;255;0, odometry 0;100;200.
+# ral.rviz: truth 255;0;0, estimate 0;170;255, plan 0;255;0, odometry 0;100;200.
 COLOR_TRUTH = '#FF0000'
 COLOR_ESTIMATE = '#00AAFF'
 COLOR_PLAN = '#00FF00'
 COLOR_COMMAND = '#FF8C00'
 COLOR_FAULT = '#CC33CC'
 
-# The goal tolerance is read per run from env.json's nav2_params_path (the run
-# records the path and its SHA), never duplicated here: a copy that drifts
-# from nav2_roomba.yaml would draw a circle the controller does not use.
+# The Nav2 goal tolerance is read per run from env.json's nav2_params_path
+# (the run records the path and its SHA), never duplicated here: a copy that
+# drifts from nav2_roomba.yaml would draw a circle the controller does not
+# use. A platform with no Nav2 has no such file, and its tolerance comes from
+# its profile instead - which is the number ITS controller stops at.
 GOAL_TOLERANCE_KEY = ('controller_server', 'ros__parameters', 'general_goal_checker',
                       'xy_goal_tolerance')
 
@@ -96,9 +105,6 @@ FAULT_STATE_MARKERS = {
     'rejected': ('x', '#AA0000'),
     'cleared': ('s', '#008800'),
 }
-
-READ_TOPICS = [TOPIC_MAP, TOPIC_TRUTH, TOPIC_AMCL, TOPIC_PLAN, TOPIC_CMD,
-               TOPIC_MISSION, TOPIC_FAULTS, TOPIC_ACTION_FEEDBACK]
 
 
 def _legend(axis) -> None:
@@ -113,65 +119,19 @@ def _empty(axis, reason: str) -> None:
               transform=axis.transAxes, fontsize=11, color='#AA0000', wrap=True)
 
 
-def _goal_tolerance(nav2_params_path: str) -> 'float | None':
-    """xy_goal_tolerance from the params THIS run used, or None when absent."""
+def _goal_tolerance(profile: dict, nav2_params_path: str) -> 'tuple':
+    """(tolerance, label) from the source THIS run's controller actually used."""
+    if profile['mission_driver'] != 'nav2':
+        return (float(profile['goal_tolerance_m']),
+                'the robot profile\'s goal_tolerance_m')
     try:
         with open(nav2_params_path) as handle:
             node = yaml.safe_load(handle) or {}
         for key in GOAL_TOLERANCE_KEY:
             node = node[key]
-        return float(node)
+        return float(node), f'{os.path.basename(nav2_params_path)} xy_goal_tolerance'
     except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError):
-        return None
-
-
-def _grid_from_pgm(map_yaml_path: str):
-    """Read the committed grid, for a bag that recorded no /map: (array, info)."""
-    with open(map_yaml_path) as handle:
-        meta = yaml.safe_load(handle)
-    # This reader inverts the pixel ratio for negate: 0 and places the grid
-    # with an axis-aligned extent. Both assumptions hold for apartment.yaml;
-    # neither is checked anywhere else, so a map that breaks one is refused
-    # rather than drawn wrong.
-    if int(meta.get('negate', 0)) != 0:
-        raise ValueError(f'{map_yaml_path} sets negate: 1; this reader inverts the '
-                         'ratio for negate: 0 only and would draw free space as wall')
-    if len(meta['origin']) > 2 and abs(float(meta['origin'][2])) > 1e-9:
-        raise ValueError(f'{map_yaml_path} has a rotated origin '
-                         f'({meta["origin"][2]} rad); _draw_grid places the grid with '
-                         'an axis-aligned extent and would put every cell elsewhere')
-    image_path = os.path.join(os.path.dirname(map_yaml_path), meta['image'])
-    with open(image_path, 'rb') as handle:
-        data = handle.read()
-    # Minimal binary PGM (P5) reader: nav2's map_saver writes exactly this.
-    fields = []
-    index = 0
-    while len(fields) < 4:
-        while index < len(data) and data[index:index + 1].isspace():
-            index += 1
-        if data[index:index + 1] == b'#':
-            while index < len(data) and data[index:index + 1] != b'\n':
-                index += 1
-            continue
-        start = index
-        while index < len(data) and not data[index:index + 1].isspace():
-            index += 1
-        fields.append(data[start:index])
-    index += 1
-    magic, width, height, maxval = fields[0], int(fields[1]), int(fields[2]), int(fields[3])
-    if magic != b'P5':
-        raise ValueError(f'{image_path} is {magic!r}, not a binary P5 pgm')
-    pixels = np.frombuffer(data[index:index + width * height], dtype=np.uint8)
-    pixels = pixels.reshape(height, width)[::-1]        # pgm is top-down, the grid is not
-    occupancy = np.full(pixels.shape, -1, dtype=np.int16)
-    free = meta.get('free_thresh', 0.25)
-    occupied = meta.get('occupied_thresh', 0.65)
-    ratio = (maxval - pixels.astype(np.float32)) / maxval
-    occupancy[ratio >= occupied] = 100
-    occupancy[ratio <= free] = 0
-    info = {'resolution': meta['resolution'], 'origin': meta['origin'],
-            'width': width, 'height': height}
-    return occupancy, info
+        return None, 'nav2 params unreadable'
 
 
 def _draw_grid(axis, occupancy, info) -> None:
@@ -195,25 +155,48 @@ def write_plot(run_dir: str) -> str:
     metrics = computed['metrics']
     meta = computed['meta']
 
-    # The SAME source metrics.py scores against: the alignment copied into the
-    # run's env.json, never run.json's convenience copy and never the current
-    # repository file. A run carries the alignment it was scored with.
+    # The SAME sources metrics.py scores against: the alignment and the robot
+    # profile copied into the run's env.json, never run.json's convenience
+    # copy and never the current repository files. A run carries what it was
+    # scored with.
     alignment = yaml.safe_load(env['alignment'])['world_to_map']
     wtm = (float(alignment['x']), float(alignment['y']), float(alignment['yaw']))
-    tolerance = _goal_tolerance(env.get('nav2_params_path', ''))
-    data, _status = read_bag(os.path.join(run_dir, 'bag'), READ_TOPICS)
+    profile = yaml.safe_load(env['robot_profile'])
+    estimate_descriptor = profile['estimate']
+    command_descriptor = profile['command']
+    estimate_label = estimate_descriptor['label']
+    is_velocity_command = command_descriptor['kind'] == 'velocity_twist'
+    plant_max_linear = float(profile['plant']['max_linear_m_s'])
+    wtl_doc = run_json.get('world_to_ekf_local')
+    wtl = None
+    if wtl_doc:
+        wtl = (float(wtl_doc['x']), float(wtl_doc['y']), float(wtl_doc['yaw']))
+    tolerance, tolerance_source = _goal_tolerance(profile, env.get('nav2_params_path') or '')
+
+    topics = read_topics(profile)
+    data, _status = read_bag(os.path.join(run_dir, 'bag'), topics)
+
+    def read(topic):
+        """Bag samples for a topic THIS profile may not have asked for."""
+        return data.get(topic, [])
 
     truth = truth_track(data[TOPIC_TRUTH], wtm)
-    amcl = [(stamp_of(msg, log_time),
-             msg.pose.pose.position.x, msg.pose.pose.position.y)
-            for log_time, msg in data[TOPIC_AMCL]]
+    # Converted through the same composition metrics.py uses, so the panel and
+    # the JSON cannot place the estimate differently.
+    estimate = estimate_track(
+        [(stamp_of(msg, log_time), msg)
+         for log_time, msg in read(estimate_descriptor['topic'])],
+        estimate_descriptor['frame'], wtm, wtl)
+    have_plan_topic = TOPIC_PLAN in topics
     plans = [(stamp_of(msg, log_time),
               [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses])
-             for log_time, msg in data[TOPIC_PLAN]]
-    cmds = [(log_time, msg.linear.x, msg.angular.z) for log_time, msg in data[TOPIC_CMD]]
+             for log_time, msg in read(TOPIC_PLAN)]
+    cmds = ([(log_time, msg.linear.x, msg.angular.z)
+             for log_time, msg in read(command_descriptor['topic'])]
+            if is_velocity_command else [])
     mission = [(ral_stamp(msg), msg) for _, msg in data[TOPIC_MISSION]]
     faults = [(ral_stamp(msg), msg) for _, msg in data[TOPIC_FAULTS]]
-    feedback = [(log_time, msg.feedback) for log_time, msg in data[TOPIC_ACTION_FEEDBACK]]
+    feedback = [(log_time, msg.feedback) for log_time, msg in read(TOPIC_ACTION_FEEDBACK)]
 
     window = meta['mission_window']
     t0 = window.get('t_accept_sim')
@@ -230,8 +213,8 @@ def write_plot(run_dir: str) -> str:
     # -- A: the map frame -----------------------------------------------------
     axis = axes[0][0]
     grid_source = None
-    if data[TOPIC_MAP]:
-        grid_msg = data[TOPIC_MAP][0][1]
+    if read(TOPIC_MAP):
+        grid_msg = read(TOPIC_MAP)[0][1]
         occupancy = np.array(grid_msg.data, dtype=np.int16).reshape(
             grid_msg.info.height, grid_msg.info.width)
         info = {'resolution': grid_msg.info.resolution,
@@ -241,7 +224,7 @@ def write_plot(run_dir: str) -> str:
         _draw_grid(axis, occupancy, info)
     else:
         try:
-            occupancy, info = _grid_from_pgm(env['map_yaml'])
+            occupancy, info = grid_from_pgm(env['map_yaml'])
             grid_source = 'map: from file (the bag recorded no /map)'
             _draw_grid(axis, occupancy, info)
         except (OSError, ValueError, KeyError) as exc:
@@ -252,10 +235,16 @@ def write_plot(run_dir: str) -> str:
                   linewidth=1.8, label='truth (simulator, evaluation only)')
         axis.plot(truth[0][1], truth[0][2], marker='o', color=COLOR_TRUTH, markersize=9,
                   linestyle='none', label='start (truth)')
-    if amcl:
+    if estimate:
         # Dashed, so truth and estimate are distinguishable without colour.
-        axis.plot([s[1] for s in amcl], [s[2] for s in amcl], color=COLOR_ESTIMATE,
-                  linewidth=1.4, linestyle='--', label='estimate (AMCL)')
+        axis.plot([s[1] for s in estimate], [s[2] for s in estimate],
+                  color=COLOR_ESTIMATE, linewidth=1.4, linestyle='--',
+                  label=f'estimate ({estimate_label})')
+    if not have_plan_topic:
+        # An empty legend entry, because a missing plan must read as "this
+        # platform has none" rather than as a plan that failed to draw.
+        axis.plot([], [], color=COLOR_PLAN, linewidth=1.6, linestyle='--',
+                  label='no plan: this platform plans inside the autopilot')
     last_plan = None
     for stamp, points in plans:
         if not have_window or stamp <= t1:
@@ -276,9 +265,9 @@ def write_plot(run_dir: str) -> str:
     if goal:
         axis.plot(goal[0], goal[1], marker='*', color='#000000', markersize=16,
                   linestyle='none',
-                  label=(f'goal (± {tolerance:.2f} m xy tolerance)' if tolerance is not None
-                         else 'goal (xy tolerance unavailable: '
-                              'nav2 params unreadable)'))
+                  label=(f'goal (± {tolerance:.2f} m xy tolerance, from '
+                         f'{tolerance_source})' if tolerance is not None
+                         else f'goal (xy tolerance unavailable: {tolerance_source})'))
         if tolerance is not None:
             axis.add_patch(plt.Circle((goal[0], goal[1]), tolerance, fill=False,
                                       linestyle='--', edgecolor='#000000', linewidth=1.0))
@@ -330,7 +319,7 @@ def write_plot(run_dir: str) -> str:
     axis.set_xlabel('x (m, map)')
     axis.set_ylabel('y (m, map)')
     _legend(axis)
-    if not truth and not amcl:
+    if not truth and not estimate:
         _empty(axis, 'no truth and no estimate in the bag')
 
     # -- B: estimate error ----------------------------------------------------
@@ -338,14 +327,15 @@ def write_plot(run_dir: str) -> str:
     # the whole bag would put the warm-up rotation and the post-terminal tail
     # into a curve a reader compares against a windowed number.
     axis = axes[0][1]
-    amcl_b = [s for s in amcl if t0 <= s[0] <= t1] if have_window else amcl
+    estimate_b = ([s for s in estimate if t0 <= s[0] <= t1] if have_window
+                  else estimate)
     truth_b = [s for s in truth if t0 <= s[0] <= t1] if have_window else truth
-    pairs = pair_nearest([(s[0], (s[1], s[2])) for s in amcl_b],
+    pairs = pair_nearest([(s[0], (s[1], s[2])) for s in estimate_b],
                          [(s[0], (s[1], s[2])) for s in truth_b])
     if pairs:
         axis.plot([p[0] for p in pairs],
                   [math.hypot(p[1][0] - p[2][0], p[1][1] - p[2][1]) for p in pairs],
-                  color=COLOR_ESTIMATE, linewidth=1.2, label='|AMCL − truth|')
+                  color=COLOR_ESTIMATE, linewidth=1.2, label='|estimate − truth|')
         entry = metrics['est_error_at_start_pose_m']
         if entry['value'] is not None:
             axis.axhline(entry['value'], linestyle='--', color='#666666',
@@ -357,7 +347,7 @@ def write_plot(run_dir: str) -> str:
                           (0.02, 0.92), xycoords='axes fraction', fontsize=8,
                           color='#AA0000', wrap=True)
     else:
-        _empty(axis, f'no AMCL/truth pair within {STAMP_MATCH_S * 1000:.0f} ms')
+        _empty(axis, f'no estimate/truth pair within {STAMP_MATCH_S * 1000:.0f} ms')
     axis.set_title('B. estimate error vs sim time' if have_window else
                    'B. estimate error vs sim time — NO mission window, whole bag shown')
     axis.set_xlabel('sim time (s)')
@@ -365,29 +355,20 @@ def write_plot(run_dir: str) -> str:
     _legend(axis)
 
     # -- C: commanded vs achieved --------------------------------------------
+    # Two shapes, because the platforms are commanded differently: a velocity
+    # command can be drawn beside the motion it asked for, a position
+    # setpoint cannot. For the second the only honest reference line is the
+    # cruise speed the autopilot is configured with, and the achieved curve is
+    # labelled as differentiated SIMULATOR TRUTH in both cases.
     axis = axes[1][0]
-    if cmds and len(truth) >= 3:
+    start = t0 if have_window else (truth[0][0] if truth else 0.0)
+    end = t1 if have_window else (truth[-1][0] if truth else 0.0)
+    if is_velocity_command and cmds and len(truth) >= 3:
         # The metric's own grid when there is a window, so the figure and
         # metrics.json cannot disagree about phase or sample count.
-        start = t0 if have_window else truth[0][0]
-        end = t1 if have_window else truth[-1][0]
-        step = 1.0 / RESAMPLE_HZ
-        count = max(3, int((end - start) / step) + 1)
-        grid = [start + index * step for index in range(count)]
+        grid, achieved_linear, achieved_angular = achieved_velocity(truth, start, end)
         cmd_linear = resample_zoh([(s[0], s[1]) for s in cmds], grid)
         cmd_angular = resample_zoh([(s[0], s[2]) for s in cmds], grid)
-        truth_x = resample_linear([(s[0], s[1]) for s in truth], grid)
-        truth_y = resample_linear([(s[0], s[2]) for s in truth], grid)
-        truth_yaw = resample_linear(
-            list(zip([s[0] for s in truth], unwrap_angles([s[3] for s in truth]))), grid)
-        dx = moving_average(central_difference(truth_x, step), SMOOTH_SAMPLES)
-        dy = moving_average(central_difference(truth_y, step), SMOOTH_SAMPLES)
-        achieved_angular = moving_average(central_difference(truth_yaw, step),
-                                          SMOOTH_SAMPLES)
-        achieved_linear = [
-            None if (dx[i] is None or dy[i] is None or truth_yaw[i] is None)
-            else dx[i] * math.cos(truth_yaw[i]) + dy[i] * math.sin(truth_yaw[i])
-            for i in range(count)]
         axis.step(grid, [v if v is not None else np.nan for v in cmd_linear], where='post',
                   color=COLOR_COMMAND, linewidth=1.2, label='commanded linear.x (m/s)')
         axis.plot(grid, [v if v is not None else np.nan for v in achieved_linear],
@@ -410,10 +391,27 @@ def write_plot(run_dir: str) -> str:
         twin_handles, twin_labels = twin.get_legend_handles_labels()
         axis.legend(handles + twin_handles, labels + twin_labels, loc='upper left',
                     fontsize=8)
+    elif not is_velocity_command and len(truth) >= 3:
+        grid, achieved_linear, _ = achieved_velocity(truth, start, end)
+        axis.plot(grid, [v if v is not None else np.nan for v in achieved_linear],
+                  color=COLOR_TRUTH, linewidth=1.2,
+                  label=(f'achieved forward speed (m/s, '
+                         f'{SMOOTH_SAMPLES / RESAMPLE_HZ:.1f} s moving average of '
+                         'differentiated truth)'))
+        axis.axhline(plant_max_linear, linestyle='--', color=COLOR_COMMAND,
+                     linewidth=1.2, label='commanded cruise speed (WP_SPEED)')
+        axis.set_ylabel('m/s')
+        _legend(axis)
+    elif is_velocity_command:
+        _empty(axis, f'{len(cmds)} {command_descriptor["topic"]} message(s), '
+                     f'{len(truth)} truth sample(s); a central difference needs at '
+                     'least 3')
     else:
-        _empty(axis, f'{len(cmds)} /cmd_vel message(s), {len(truth)} truth sample(s); '
-                     'a central difference needs at least 3')
-    axis.set_title('C. commanded vs achieved (achieved = differentiated truth pose)')
+        _empty(axis, f'{len(truth)} truth sample(s); a central difference needs at '
+                     'least 3')
+    axis.set_title('C. commanded vs achieved (achieved = differentiated truth pose)'
+                   if is_velocity_command else
+                   'C. achieved speed vs commanded cruise speed')
     axis.set_xlabel('sim time (s)')
 
     # -- D: event timeline ----------------------------------------------------
@@ -462,15 +460,17 @@ def write_plot(run_dir: str) -> str:
     _legend(axis)
 
     # B, C and D share the sim-time axis; A is a map and does not.
-    spans = [s[0] for s in truth] + [s[0] for s in amcl] + [s[0] for s in cmds]
+    spans = [s[0] for s in truth] + [s[0] for s in estimate] + [s[0] for s in cmds]
     if spans:
         for other in (axes[0][1], axes[1][0], axes[1][1]):
             other.set_xlim(min(spans), max(spans))
 
+    plan_label = ('nav2 global planner' if have_plan_topic
+                  else 'none (ArduRover plans inside the autopilot)')
     figure.text(0.5, 0.012,
-                'truth = simulator ground truth (evaluation only) · estimate = AMCL · '
-                'plan = nav2 global planner · command = /cmd_vel (velocity_smoother '
-                'output) · all times are sim time off /clock',
+                'truth = simulator ground truth (evaluation only) · estimate = '
+                f'{estimate_label} · plan = {plan_label} · command = '
+                f'{command_descriptor["label"]} · all times are sim time off /clock',
                 ha='center', fontsize=9, color='#333333')
     figure.tight_layout(rect=[0, 0.03, 1, 0.96])
     path = os.path.join(run_dir, 'plot.png')

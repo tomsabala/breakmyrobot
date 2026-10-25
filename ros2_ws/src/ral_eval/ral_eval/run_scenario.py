@@ -15,10 +15,22 @@
 """
 Scenario in, run directory out.
 
-Reads one scenario file, brings the whole stack up, records a bag, localizes,
-drives one mission, dispatches the scenario's interventions on SIM time, and
-leaves behind runs/<experiment_id>_<UTC>/ containing scenario.yaml, env.json,
-run.json, bag/, metrics.json, plot.png and launch.log.
+Reads one scenario file, brings that robot's whole stack up, records a bag,
+prepares the platform for a goal, drives one mission, dispatches the
+scenario's interventions on SIM time, and leaves behind
+runs/<experiment_id>_<UTC>/ containing scenario.yaml, env.json, run.json,
+bag/, metrics.json, plot.png and launch.log.
+
+What is PER ROBOT and what is not
+---------------------------------
+Everything platform-specific is read from the run's robot profile
+(ral_bringup/config/robots/<robot>.yaml): the stack launch file, the gz model
+a fault addresses, the estimate topic and its type, the footprint radius, the
+bring-up gate, the recorded topics and - through `mission_driver` - HOW a goal
+is sent and monitored. That last part is a MissionDriver
+(ral_eval/mission_driver.py); this module owns /mission_state, the bag, the
+intervention schedule, the timeout and the artifacts, and nothing else knows
+whether the robot underneath is driven by Nav2 or by an autopilot.
 
 Time
 ----
@@ -36,21 +48,21 @@ Exit codes
   1  the map/alignment pair was refused (stale, unsealed or missing).
   2  the scenario is invalid, or the run directory already exists. Nothing is
      created under runs/.
-  3  the stack never came up, or nav2_roomba.yaml / the map yaml does not
-     carry the footprint limits the pre-flight checks against. run.json
-     records what was missing.
+  3  the stack never came up, the autonomy stack never became ready, or the
+     map yaml does not carry the occupancy limit the pre-flight checks
+     against. run.json records what was missing.
   4  the bag is missing, unfinalised, empty, or short of the latched topics
      the QoS override pins; the run cannot be measured.
   5  metrics or the plot raised. The bag is kept so it can be recomputed.
 
 Bag size
 --------
-RECORD_TOPICS is deliberately wide: a baseline run writes ~21 MB over ~75,000
-messages, of which /joint_states contributes 29,170 and /scan plus /scan_raw
-most of the remainder. rosbag2's Humble CLI has no per-topic throttle, so each
-topic is all-or-nothing; /joint_states stays because wheel motion against
-truth motion is how slip is observed, and that is what Phase 4.3's mobility
-fault will be read from.
+RECORD_TOPICS_COMMON plus the profile's `record_topics` is deliberately wide:
+a baseline Roomba run writes ~21 MB over ~75,000 messages, of which
+/joint_states contributes 29,170 and /scan plus /scan_raw most of the
+remainder. rosbag2's Humble CLI has no per-topic throttle, so each topic is
+all-or-nothing; /joint_states stays because wheel motion against truth motion
+is how slip is observed, and that is what the mobility fault is read from.
 
 Concurrency
 -----------
@@ -72,11 +84,14 @@ same id, and this runner adds nothing to it.
 
 Frames
 ------
-Scenario poses are in the gz WORLD frame. /initialpose and the NavigateToPose
-goal are converted to `map` with ral_eval.frames and the alignment sealed to
-the map in use; gz entity poses (spawn_obstacle, kidnap) are passed through
-UNCONVERTED, because `world` is the frame gz defines them in. run.json records
-both forms for the mission poses and `pose_frame: world` for the gz ones.
+Scenario poses are in the gz WORLD frame. The mission poses are converted to
+`map` with ral_eval.frames and the alignment sealed to the map in use, and a
+driver converts them again if its platform works in another frame - the car's
+setpoints are in the autopilot's EKF-local frame, through the offset measured
+for that run. The SPAWN pose is the scenario's declared initial pose, passed
+to the launch file, so the declared and the actual pose cannot disagree. gz
+entity poses (spawn_obstacle, kidnap) are passed through UNCONVERTED, because
+`world` is the frame gz defines them in. run.json records every form.
 
 Unlike the Phase 2 proof harness in scripts/checks/, this module DOES import
 ral_eval.frames and ral_eval.scenario. It is production code, not an
@@ -135,17 +150,17 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
-from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Odometry
 from ral_eval.frames import (
     frames_path_for_map,
     grid_sha256,
     load_alignment_for_map,
-    wrap_to_pi,
 )
+from ral_eval.grid import grid_from_pgm
+from ral_eval.mission_driver import OUTCOMES, build_driver, outcome_is_known
+from ral_eval.robot_profile import load_profile, profile_path
 from ral_eval.scenario import ScenarioError, load_scenario, mission_poses
 from ral_interfaces.msg import FaultEvent, MissionState
 from ral_interfaces.srv import (
@@ -156,10 +171,10 @@ from ral_interfaces.srv import (
     SpawnObstacle,
 )
 import rclpy
-from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import LaserScan
 
 import yaml
@@ -171,41 +186,28 @@ EXIT_BRINGUP = 3
 EXIT_BAG = 4
 EXIT_ARTIFACTS = 5
 
-MODEL = 'ral_roomba'
-
-BRINGUP_WALL_LIMIT = 90.0        # s wall, guards a stack that never comes up
-ACTION_SERVER_WALL_LIMIT = 60.0  # s wall for navigate_to_pose to appear
+# The bring-up limit is the PROFILE's `bringup_wall_limit_s`, not a constant:
+# what counts as "too long to come up" is a property of the stack. Nav2 is
+# ready as soon as its lifecycle manager activates; an autopilot cannot report
+# a position until EKF3 has an origin, which waits on a simulated GPS fix.
+STACK_READY_WALL_LIMIT = 60.0    # s wall for the autonomy stack to accept a goal
 RECORDER_WALL_LIMIT = 60.0       # s wall for the recorder to subscribe to the gate topics
 RECORDER_SETTLE_WALL = 1.0       # s wall after it subscribed, for publisher-side matching
-AMCL_CONVERGE_SIM = 30.0         # s sim allowed for the filter to converge
-AMCL_WARMUP_RATE = 0.6           # rad/s in-place rotation; AMCL updates on motion only
-# AMCL publishes on filter UPDATE, and its filter updates on motion. The
-# instant it converges the warm-up would otherwise stop, and the robot then
-# stands still publishing nothing - measured: exactly ONE converged /amcl_pose
-# before the goal, so est_error_at_start_pose_m was an average over a single
-# sample. Keeping the in-place rotation going for a few more sim seconds costs
-# nothing (xy is unchanged, so the samples are still taken at the start pose)
-# and makes the residual a mean rather than one reading.
-AMCL_FLOOR_SAMPLE_SIM = 4.0      # s sim of extra in-place rotation after convergence
-AMCL_SETTLE_SIM = 2.0            # s sim stopped before reading the residual
-COVARIANCE_LIMIT = 0.25          # trace(x, y, yaw) below which AMCL has converged
-YAW_ALIGN_SIM = 20.0             # s sim allowed to turn back to the scenario's yaw
-# > amcl update_min_a (0.2 rad, nav2_roomba.yaml:79). AMCL publishes on filter
-# update and its filter updates on motion, so a tolerance below that quantum
-# asks the loop to close on a signal finer than the estimate it reads.
-YAW_ALIGN_TOLERANCE = 0.25       # rad (~14 deg), the heading the mission starts from
-YAW_ALIGN_MIN_RATE = 0.15        # rad/s floor, so the last few degrees do not stall
-GOAL_ACCEPT_WAIT_SIM = 30.0      # s sim for the action server to accept or refuse
 SERVICE_WAIT_SIM = 5.0           # s sim an intervention waits for its service
 POST_TERMINAL_SIM = 2.0          # s sim recorded after the terminal result
 CANCEL_WAIT_SIM = 10.0           # s sim allowed for a cancel to produce a terminal status
-# robot_radius and occupied_thresh are NOT constants here: they are read from
-# the nav2 params and the map yaml this run actually used, and recorded in
-# run.json. A footprint check against a guessed radius is not a check.
+# robot_radius, occupied_thresh, the gz model name, the estimate topic and the
+# localization warm-up are NOT constants here. The first two are read from the
+# robot profile and the map yaml this run actually used and recorded in
+# run.json; the model and the estimate come from the profile; the warm-up
+# belongs to whichever MissionDriver this platform uses, because an Ackermann
+# vehicle has no in-place rotation to warm a filter up with. A check against a
+# guessed value is not a check.
 
 # The gz contact topic the /bumper bridge carries, per
-# ral_bringup/config/bridge_roomba_<world>.yaml.
-BUMPER_GZ_TOPIC = ('/world/{world}/model/ral_roomba/link/base_link/sensor/bumper/'
+# ral_bringup/config/bridge_<robot>_<world>.yaml. The model name is the
+# profile's, so the liveness proof addresses the body this run spawned.
+BUMPER_GZ_TOPIC = ('/world/{world}/model/{model}/link/base_link/sensor/bumper/'
                    'contact')
 
 # The mission states this runner can publish. test_mission_vocabulary asserts
@@ -223,31 +225,18 @@ MISSION_STATES = (
     MissionState.STATE_UNKNOWN,
 )
 
-# Terminal action status -> mission state. Only these three are terminal for a
-# goal this runner sent; anything else is reported as no terminal status
-# rather than mapped to a guess.
-TERMINAL_STATES = {
-    GoalStatus.STATUS_SUCCEEDED: (MissionState.STATE_SUCCEEDED, 'STATUS_SUCCEEDED'),
-    GoalStatus.STATUS_CANCELED: (MissionState.STATE_CANCELED, 'STATUS_CANCELED'),
-    GoalStatus.STATUS_ABORTED: (MissionState.STATE_ABORTED, 'STATUS_ABORTED'),
-}
-
-# Topics recorded for every run, each because a metric or a plot panel needs
-# it. The bag is the source of record; run.json is the fallback only for the
-# action status.
-RECORD_TOPICS = (
+# Topics recorded for EVERY run, whatever the robot, each because a metric or
+# a plot panel needs it. The bag is the source of record; run.json is the
+# fallback only for the terminal status. A platform's own topics - the
+# estimate, the command, the autonomy stack's internals - are listed in its
+# profile's `record_topics`, and the two are concatenated for a run.
+RECORD_TOPICS_COMMON = (
     '/clock',                               # the sim time every other stamp is in
-    '/tf',                                  # map->odom->base_link, for inspection
+    '/tf',                                  # the estimate chain, for inspection
     '/tf_static',                           # sensor mounting; latched, see the QoS file
-    '/map',                                 # plot panel A's grid; latched, see the QoS file
-    '/initialpose',                         # localization_converged_sim_s start
-    '/amcl_pose',                           # est_error_*, est_cov_trace_max
-    '/odom',                                # wheel odometry, for inspection
     '/ground_truth/odom',                   # path_length_m, goal_pose_error_m, achieved v
-    '/scan',                                # the stream AMCL and the costmaps consume
+    '/scan',                                # the stream the relay publishes
     '/scan_raw',                            # Phase 4.2 proves degradation between the two
-    '/cmd_vel',                             # stopped_time_s, cmd_vs_achieved
-    '/plan',                                # plan_publications, fault_to_response_s
     '/bumper',                              # collision_count
     '/joint_states',                        # wheel motion; truth-vs-wheel divergence is
                                             # how slip is observed (Phase 4.3's mobility
@@ -257,8 +246,6 @@ RECORD_TOPICS = (
     '/faults/active',                       # the manager's authoritative snapshot of
                                             # what was in force, latched
     '/rosout',                              # node-side errors beside the run
-    '/navigate_to_pose/_action/status',     # nav2_result, verbatim
-    '/navigate_to_pose/_action/feedback',   # recoveries, distance_remaining
 )
 
 # Topics whose PRE-MISSION history is evidence, so nothing may be published on
@@ -267,19 +254,18 @@ RECORD_TOPICS = (
 # subscription landed 5.6 s after the process started, and a fixed 3 s wait
 # silently lost every /initialpose and the whole localization warm-up. The
 # only reliable signal is the recorder's own subscription appearing in the
-# graph, so that is what the runner waits for.
-RECORDER_GATE_TOPICS = (
-    '/initialpose',          # localization_converged_sim_s starts here
-    '/cmd_vel',              # the warm-up rotation, and the start-pose residual window
+# graph, so that is what the runner waits for. A platform adds its own in the
+# profile's `recorder_gate_topics`.
+RECORDER_GATE_TOPICS_COMMON = (
     '/mission_state',        # the mission window
     '/fault_events',         # a fault rejected before the mission must be recorded
-    '/amcl_pose',            # convergence, and the stationary residual
-    '/ground_truth/odom',    # the truth half of that residual
+    '/ground_truth/odom',    # the truth half of every residual
 )
 RECORDER_NODE_PREFIX = 'rosbag2'
 
 
-def wait_for_recorder(node, wall_limit: float = RECORDER_WALL_LIMIT) -> list:
+def wait_for_recorder(node, gate_topics,
+                      wall_limit: float = RECORDER_WALL_LIMIT) -> list:
     """
     Block until the recorder has subscribed to every gate topic.
 
@@ -289,11 +275,11 @@ def wait_for_recorder(node, wall_limit: float = RECORDER_WALL_LIMIT) -> list:
     silently zero.
     """
     deadline = time.monotonic() + wall_limit
-    missing = list(RECORDER_GATE_TOPICS)
+    missing = list(gate_topics)
     while time.monotonic() < deadline and missing:
         node.spin_wall(0.25)
         missing = [
-            topic for topic in RECORDER_GATE_TOPICS
+            topic for topic in gate_topics
             if not any(info.node_name.startswith(RECORDER_NODE_PREFIX)
                        for info in node.get_subscriptions_info_by_topic(topic))]
     # The subscription is visible in the graph; give the local publishers one
@@ -302,7 +288,7 @@ def wait_for_recorder(node, wall_limit: float = RECORDER_WALL_LIMIT) -> list:
     return missing
 
 
-def bumper_liveness(node, world: str) -> dict:
+def bumper_liveness(node, world: str, model: str) -> dict:
     """
     Prove the contact path is wired without waiting for a contact.
 
@@ -313,7 +299,7 @@ def bumper_liveness(node, world: str) -> dict:
     """
     publishers = sorted(info.node_name
                         for info in node.get_publishers_info_by_topic('/bumper'))
-    gz_topic = BUMPER_GZ_TOPIC.format(world=world)
+    gz_topic = BUMPER_GZ_TOPIC.format(world=world, model=model)
     try:
         listed = subprocess.run(['gz', 'topic', '-l'], capture_output=True,
                                 text=True, timeout=30).stdout
@@ -366,6 +352,28 @@ def yaw_of_quaternion(q) -> float:
 def _sha256_file(path: str) -> str:
     with open(path, 'rb') as handle:
         return hashlib.sha256(handle.read()).hexdigest()
+
+
+# Written by docker/build_overlay.sh at image build time: the ArduPilot commit
+# the SITL binary in this image was built from. docker/ardupilot.repos pins a
+# BRANCH, so without this file a run can say which branch it meant but not
+# which code it flew.
+FIRMWARE_VERSION_PATH = '/opt/ardupilot/VERSION.txt'
+
+
+def _firmware_sha() -> 'str | None':
+    """
+    Read the ArduPilot commit this image was built from, or None when absent.
+
+    None is not a failure: an image built without the autopilot overlay has no
+    firmware, and env.json carries the source path beside this value so a
+    reader can tell "no autopilot here" from "the file was not written".
+    """
+    try:
+        with open(FIRMWARE_VERSION_PATH) as handle:
+            return handle.read().strip() or None
+    except OSError:
+        return None
 
 
 def _git_sha(cwd: str) -> str:
@@ -521,13 +529,19 @@ def _kidnap_request(params: dict, fault_id: str) -> Kidnap.Request:
     return request
 
 
-def _target_of(kind: str, params: dict) -> str:
-    """Return the entity or stream a fault acts on, for FaultEvent.target."""
+def _target_of(kind: str, params: dict, model: str) -> str:
+    """
+    Return the entity or stream a fault acts on, for FaultEvent.target.
+
+    `model` is the gz entity from the run's robot profile, never a constant:
+    the manager labels its own events with the same name, and the two reading
+    differently would put one fault under two targets in one bag.
+    """
     if kind in (FaultEvent.KIND_SPAWN_OBSTACLE, FaultEvent.KIND_CLEAR_OBSTACLE):
         return params['name']
     if kind == FaultEvent.KIND_SCAN_DEGRADATION:
         return '/scan'
-    return MODEL
+    return model
 
 
 # The single place an intervention type maps to the service that implements
@@ -546,11 +560,16 @@ DISPATCH = {
 class ScenarioRunner(Node):
     """Drives one scenario against a running stack. Observes; never fakes."""
 
-    def __init__(self, experiment_id: str) -> None:
+    def __init__(self, experiment_id: str, profile: dict, wtm) -> None:
         super().__init__(
             'run_scenario',
             parameter_overrides=[Parameter('use_sim_time', Parameter.Type.BOOL, True)])
         self.experiment_id = experiment_id
+        self.profile = profile
+        # The measured world -> map alignment this run is scored in. The
+        # MAVROS driver needs it to express a `map` goal in the autopilot's
+        # frame; the Nav2 driver works in `map` throughout.
+        self.wtm = wtm
 
         self.odom = None
         self.truth = None
@@ -558,12 +577,18 @@ class ScenarioRunner(Node):
         self.scan_raw = None
         self.grid = None
         self.amcl = None
-        # The sim instant the filter's covariance trace FIRST fell below
-        # COVARIANCE_LIMIT, observed in the callback. Sampling it later, after
-        # the extra rotation and the yaw alignment, would measure the whole
-        # warm-up and publish it under the convergence metric's name -
-        # measured 17.01 s against metrics.json's 2.786 s for the same run.
+        # The sim instant the filter's covariance trace FIRST fell below the
+        # profile's convergence limit, observed in the callback. Sampling it
+        # later, after the extra rotation and the yaw alignment, would measure
+        # the whole warm-up and publish it under the convergence metric's
+        # name - measured 17.01 s against metrics.json's 2.786 s for the same
+        # run. None for a platform with no covariance to watch.
         self.converged_sim = None
+        # One flag per profile `bringup_topics` entry, set by a generic
+        # callback: the gate is "a message arrived", and the type comes from
+        # the profile rather than from a hardcoded import, so adding a robot
+        # does not mean editing this class.
+        self.bringup_seen = {}
 
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -575,19 +600,50 @@ class ScenarioRunner(Node):
         event_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
-        self.create_subscription(Odometry, '/odom', self._on_odom, 10)
+        # Typed subscriptions, for the streams this runner itself reads.
         self.create_subscription(Odometry, '/ground_truth/odom', self._on_truth, 10)
         self.create_subscription(LaserScan, '/scan', self._on_scan, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan_raw', self._on_scan_raw,
                                  qos_profile_sensor_data)
-        self.create_subscription(OccupancyGrid, '/map', self._on_map, latched)
-        self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self._on_amcl, 10)
+        bringup = [entry['topic'] for entry in profile['bringup_topics']]
+        if '/map' in bringup:
+            self.create_subscription(OccupancyGrid, '/map', self._on_map, latched)
+        if '/odom' in bringup:
+            self.create_subscription(Odometry, '/odom', self._on_odom, 10)
 
-        self.initial_pose_pub = self.create_publisher(
-            PoseWithCovarianceStamped, '/initialpose', 10)
-        # Used ONLY for the pre-mission localization warm-up. Nav2's
-        # velocity_smoother owns /cmd_vel once a goal is active.
-        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # The estimate, whatever it is for this robot. Built from the
+        # descriptor so neither this class nor the metrics has to know which
+        # estimator a platform runs.
+        estimate = profile['estimate']
+        if estimate['type'] == 'geometry_msgs/msg/PoseWithCovarianceStamped':
+            self.create_subscription(PoseWithCovarianceStamped, estimate['topic'],
+                                     self._on_amcl, 10)
+
+        # The bring-up gate. A generic "a message arrived" subscription per
+        # declared topic, on sensor-data QoS where the publisher is a sensor
+        # stream and RELIABLE otherwise - both are matched by subscribing with
+        # the lenient profile, so this never silently receives nothing.
+        for entry in profile['bringup_topics']:
+            topic = entry['topic']
+            self.bringup_seen[topic] = False
+            self.create_subscription(
+                get_message(entry['type']), topic,
+                lambda _msg, topic=topic: self.bringup_seen.__setitem__(topic, True),
+                qos_profile_sensor_data)
+
+        # Created only for a platform the runner can drive directly. An
+        # Ackermann vehicle commanded by position setpoint has no /cmd_vel and
+        # no /initialpose, and a publisher on a topic nothing subscribes to
+        # would appear in the graph as a command path that does not exist.
+        self.initial_pose_pub = None
+        self.cmd_pub = None
+        if profile['command']['kind'] == 'velocity_twist':
+            self.initial_pose_pub = self.create_publisher(
+                PoseWithCovarianceStamped, '/initialpose', 10)
+            # Used ONLY for the pre-mission localization warm-up. Nav2's
+            # velocity_smoother owns /cmd_vel once a goal is active.
+            self.cmd_pub = self.create_publisher(Twist, profile['command']['topic'], 10)
+
         self.mission_pub = self.create_publisher(MissionState, '/mission_state', event_qos)
         self.fault_pub = self.create_publisher(FaultEvent, '/fault_events', event_qos)
 
@@ -611,7 +667,8 @@ class ScenarioRunner(Node):
         self.amcl = msg
         if self.converged_sim is None:
             cov = msg.pose.covariance
-            if cov[0] + cov[7] + cov[35] < COVARIANCE_LIMIT:
+            limit = self.profile['estimate']['uncertainty'].get('converged_below')
+            if limit is not None and cov[0] + cov[7] + cov[35] < float(limit):
                 self.converged_sim = self.sim_now()
 
     # -- time -----------------------------------------------------------------
@@ -647,6 +704,9 @@ class ScenarioRunner(Node):
         return False
 
     def stop(self) -> None:
+        """Five zero velocity commands, for a platform that takes them."""
+        if self.cmd_pub is None:
+            return
         for _ in range(5):
             self.cmd_pub.publish(Twist())
             rclpy.spin_once(self, timeout_sec=0.02)
@@ -672,6 +732,18 @@ class ScenarioRunner(Node):
 
     def publish_mission_state(self, state: str, goal: PoseStamped,
                               outcome: str = '', detail: str = '') -> None:
+        # An outcome outside the closed set is a programming error, not an
+        # operational one: every consumer - the metrics, the plot, the checks -
+        # reads this string as a member of mission_driver.OUTCOMES, and one
+        # that is not a member silently becomes an outcome nobody can score.
+        # Raising here fails the run loudly at the moment the typo is
+        # published rather than leaving it in the bag to be discovered later.
+        if outcome and not outcome_is_known(outcome):
+            raise ValueError(
+                f'refusing to publish MissionState.outcome {outcome!r}: it is not a '
+                'member of ral_eval.mission_driver.OUTCOMES (templates expanded). '
+                'Add it there and to ral_interfaces/msg/MissionState.msg\'s closed '
+                f'set, which are one artifact. Known: {list(OUTCOMES)}')
         msg = MissionState()
         msg.stamp = self.get_clock().now().to_msg()
         msg.experiment_id = self.experiment_id
@@ -703,47 +775,6 @@ class ScenarioRunner(Node):
         print(f'--- fault_event rejected {fault_id}: {detail}', flush=True)
 
 
-def align_to_initial_yaw(node: 'ScenarioRunner',
-                         target_yaw: float) -> 'tuple[bool, float | None]':
-    """
-    Turn in place until the ESTIMATED yaw matches the scenario's initial yaw.
-
-    Returns (aligned, estimated yaw error in rad). The error is None when AMCL
-    has published no pose at all, which is reported rather than treated as
-    zero.
-
-    The loop closes on /amcl_pose - the robot's own estimate - and never on
-    /ground_truth/odom. Steering the body with truth would make the start pose
-    exact in a way no real robot's would be, and would be the localization
-    shortcut ENGINEERING.md forbids. The consequence is honest: if AMCL is
-    wrong about the heading, the mission starts from the heading AMCL believes,
-    and run.json records the residual it believed it had.
-    """
-    deadline = node.sim_now() + YAW_ALIGN_SIM
-    wall_deadline = time.monotonic() + YAW_ALIGN_SIM * 10.0 + 60.0
-    error = None
-    last_cmd = 0.0
-    while rclpy.ok():
-        rclpy.spin_once(node, timeout_sec=0.02)
-        if node.amcl is not None:
-            error = wrap_to_pi(target_yaw - yaw_of_quaternion(node.amcl.pose.pose.orientation))
-            if abs(error) <= YAW_ALIGN_TOLERANCE:
-                node.stop()
-                node.spin_sim(AMCL_SETTLE_SIM)
-                return True, error
-        now = time.monotonic()
-        if now - last_cmd >= 0.05:
-            rate = 0.0 if error is None else math.copysign(
-                min(AMCL_WARMUP_RATE, max(YAW_ALIGN_MIN_RATE, abs(error))), error)
-            node.cmd_pub.publish(twist(angular_z=rate))
-            last_cmd = now
-        if node.sim_now() > deadline or now > wall_deadline:
-            break
-    node.stop()
-    node.spin_sim(AMCL_SETTLE_SIM)
-    return False, error
-
-
 def goal_pose_stamped(node: ScenarioRunner, goal_map) -> PoseStamped:
     """Build the goal in `map`, stamped now: used by the action and the state."""
     pose = PoseStamped()
@@ -757,6 +788,31 @@ def goal_pose_stamped(node: ScenarioRunner, goal_map) -> PoseStamped:
     pose.pose.orientation.z = qz
     pose.pose.orientation.w = qw
     return pose
+
+
+def occupancy_grid_from_pgm(map_yaml_path: str) -> OccupancyGrid:
+    """
+    Read the COMMITTED map as the message a stack with a map_server publishes.
+
+    The pre-flight takes a nav_msgs/OccupancyGrid because that is what it gets
+    on a platform running map_server. The car runs none - its autopilot
+    localizes against GPS and an IMU, not a grid - but its scenarios were
+    authored against the same committed map, and a goal inside a wall must be
+    refused for it too. ral_eval.grid is the one reader of the .pgm; this
+    wraps its output so the pre-flight has exactly one implementation.
+    """
+    occupancy, info = grid_from_pgm(map_yaml_path)
+    grid = OccupancyGrid()
+    grid.info.resolution = float(info['resolution'])
+    grid.info.width = int(info['width'])
+    grid.info.height = int(info['height'])
+    grid.info.origin.position.x = float(info['origin'][0])
+    grid.info.origin.position.y = float(info['origin'][1])
+    # The reader refuses a rotated origin, so the orientation is identity and
+    # the pre-flight's own rotation handling is exercised by a /map instead.
+    grid.info.origin.orientation.w = 1.0
+    grid.data = [int(value) for value in occupancy.reshape(-1)]
+    return grid
 
 
 def preflight_goal(grid: OccupancyGrid, goal_map, robot_radius_m: float,
@@ -846,31 +902,6 @@ def preflight_goal(grid: OccupancyGrid, goal_map, robot_radius_m: float,
     return {'ok': True, 'outcome': '', 'detail': footprint}
 
 
-def read_robot_radius(nav2_params_path: str) -> 'tuple[float, dict]':
-    """
-    Read the footprint radius the costmaps this run used were configured with.
-
-    Returns (radius, {section: value}). When the two costmaps disagree the
-    LARGER is used: a footprint check that passes for one costmap and fails
-    for the other is not a check. A missing key raises, because a guessed
-    radius would turn the pre-flight refusal into a coin toss.
-    """
-    with open(nav2_params_path) as handle:
-        doc = yaml.safe_load(handle) or {}
-    found = {}
-    for section in ('global_costmap', 'local_costmap'):
-        params = (doc.get(section) or {}).get(section, {}).get('ros__parameters', {})
-        if isinstance(params, dict) and 'robot_radius' in params:
-            found[section] = float(params['robot_radius'])
-    if 'global_costmap' not in found:
-        raise RunAbort(
-            EXIT_BRINGUP,
-            f'{nav2_params_path} has no '
-            'global_costmap.global_costmap.ros__parameters.robot_radius; the goal '
-            'pre-flight has no footprint to check and will not guess one')
-    return max(found.values()), found
-
-
 def read_occupied_thresh(map_yaml_path: str) -> int:
     """`occupied_thresh` from the map this run used, on the grid's 0..100 scale."""
     with open(map_yaml_path) as handle:
@@ -883,8 +914,8 @@ def read_occupied_thresh(map_yaml_path: str) -> int:
     return int(round(float(meta['occupied_thresh']) * 100.0))
 
 
-def record_undispatched(record: dict, pending: list, world: str, reason: str,
-                        detail: str) -> None:
+def record_undispatched(record: dict, pending: list, world: str, model: str,
+                        reason: str, detail: str) -> None:
     """
     Record every intervention that never fired, with why.
 
@@ -902,7 +933,7 @@ def record_undispatched(record: dict, pending: list, world: str, reason: str,
             'dispatched_sim_s': None,
             'service': DISPATCH[intervention['type']][0],
             'injection_point': injection_point(intervention['type'], world),
-            'target': _target_of(intervention['type'], intervention['params']),
+            'target': _target_of(intervention['type'], intervention['params'], model),
             'params': intervention['params'],
             'pose_frame': 'world' if 'pose' in intervention['params'] else None,
             'available': False,
@@ -926,7 +957,7 @@ def resolve_scenario_path(given: str) -> str:
 
 
 def dispatch_intervention(node: ScenarioRunner, intervention: dict, world: str,
-                          dispatched_sim: float) -> dict:
+                          model: str, dispatched_sim: float) -> dict:
     """
     Call the service that implements one intervention, and report honestly.
 
@@ -949,7 +980,7 @@ def dispatch_intervention(node: ScenarioRunner, intervention: dict, world: str,
     """
     kind = intervention['type']
     service_name, service_type, build_request = DISPATCH[kind]
-    target = _target_of(kind, intervention['params'])
+    target = _target_of(kind, intervention['params'], model)
     record = {
         'id': intervention['id'],
         'type': kind,
@@ -1029,7 +1060,6 @@ def run(argv=None) -> int:
     bringup_share = get_package_share_directory('ral_bringup')
     eval_share = get_package_share_directory('ral_eval')
     map_yaml = args.map or os.path.join(bringup_share, 'maps', 'apartment.yaml')
-    nav2_params = os.path.join(bringup_share, 'config', 'nav2_roomba.yaml')
     qos_overrides = os.path.join(eval_share, 'config', 'bag_qos_overrides.yaml')
 
     # 1. The scenario. Invalid -> nothing is created under runs/.
@@ -1051,10 +1081,34 @@ def run(argv=None) -> int:
     goal_map = poses['goal']['map']
     initial_map = poses['initial']['map']
 
-    # 2b. The footprint limits the pre-flight will check against, read from the
-    # files this run actually uses rather than duplicated as constants.
+    # 2b. The robot profile. Resolved BEFORE the run directory is made, so a
+    # scenario naming a robot with no profile aborts without leaving an
+    # artifact directory that looks like a result. Everything platform-
+    # specific below comes from it: the gz model, the stack launched, the
+    # estimate, the footprint, the recorded topics and the mission driver.
     try:
-        robot_radius_m, radius_sources = read_robot_radius(nav2_params)
+        profile = load_profile(profile_path(bringup_share, scenario['robot']))
+    except (ValueError, OSError) as exc:
+        print(f'ROBOT PROFILE REJECTED: {exc}', file=sys.stderr, flush=True)
+        return EXIT_SCENARIO
+    model = profile['model']
+    # Nav2's parameters are one platform's, not every platform's: a car run
+    # records null rather than the hash of a file nothing in it read.
+    nav2_params = (os.path.join(bringup_share, 'config', 'nav2_roomba.yaml')
+                   if profile['mission_driver'] == 'nav2' else None)
+    # The autopilot's parameter file, for the same reason and from the same
+    # place the launch file reads it: ardurover is started with
+    # `--defaults <this file> --wipe`, so it IS the autopilot configuration
+    # for the run and nothing carries over from a previous one. A profile
+    # without the key is a platform with no autopilot, and records null.
+    autopilot_parm = (os.path.join(bringup_share, 'config', profile['autopilot_parm'])
+                      if profile.get('autopilot_parm') else None)
+
+    # 2c. The footprint limits the pre-flight will check against, read from
+    # the files this run actually uses rather than duplicated as constants.
+    robot_radius_m = float(profile['footprint']['radius_m'])
+    radius_sources = {'robot_profile': profile['footprint']['source']}
+    try:
         occupied_thresh = read_occupied_thresh(map_yaml)
     except RunAbort as abort:
         print(f'PARAMS REJECTED: {abort}', file=sys.stderr, flush=True)
@@ -1085,17 +1139,33 @@ def run(argv=None) -> int:
     alignment_path = frames_path_for_map(map_yaml)
     with open(alignment_path) as handle:
         alignment_text = handle.read()
+    with open(profile['profile_path']) as handle:
+        profile_text = handle.read()
+    # The common set plus this platform's own. A topic listed twice would make
+    # `ros2 bag record` subscribe twice and double every message in the bag.
+    record_topics = tuple(RECORD_TOPICS_COMMON) + tuple(
+        topic for topic in profile['record_topics']
+        if topic not in RECORD_TOPICS_COMMON)
+    recorder_gate_topics = tuple(RECORDER_GATE_TOPICS_COMMON) + tuple(
+        topic for topic in profile['recorder_gate_topics']
+        if topic not in RECORDER_GATE_TOPICS_COMMON)
     git_dirty = _git_dirty(args.repo_root)
     git_sha = _git_sha(args.repo_root)
     # The scenario's own values, not defaults: `world` selects the SDF, the
-    # bridge config and the truth frame; `robot` selects the capability row
-    # and the gz model a fault addresses; `seed` is the scan relay's RNG seed.
-    # env.json copies this list verbatim, so the artifacts record exactly what
-    # was launched.
-    launch_command = ['ros2', 'launch', 'ral_bringup', 'roomba_nav.launch.py',
+    # bridge config and the truth frame; `robot` selects the profile, and with
+    # it the gz model spawned and the faults that are real for it; `seed` is
+    # the scan relay's RNG seed. The spawn pose is the scenario's DECLARED
+    # initial pose, so the pose the scenario claims and the pose the body is
+    # standing at cannot disagree. env.json copies this list verbatim, so the
+    # artifacts record exactly what was launched.
+    initial_world = poses['initial']['world']
+    launch_command = ['ros2', 'launch', 'ral_bringup', profile['stack_launch'],
                       f'world:={scenario["world"]}',
                       f'robot:={scenario["robot"]}',
-                      f'seed:={scenario["seed"]}']
+                      f'seed:={scenario["seed"]}',
+                      f'spawn_x:={initial_world[0]}',
+                      f'spawn_y:={initial_world[1]}',
+                      f'spawn_yaw:={initial_world[2]}']
     write_json(os.path.join(run_dir, 'env.json'), {
         'image_ref': args.image_ref,
         'git_sha': f'{git_sha}+dirty' if git_dirty else git_sha,
@@ -1110,12 +1180,28 @@ def run(argv=None) -> int:
         'map_sha256': grid_sha256(map_yaml),
         'alignment': alignment_text,
         'alignment_path': alignment_path,
+        # The profile's own TEXT, as `alignment` carries the alignment file's:
+        # metrics.py and plot_run.py read the robot's description out of the
+        # RUN, never out of the repository, so a profile edited after a run
+        # cannot change what that run's numbers claim to be.
+        'robot_profile': profile_text,
+        'robot_profile_path': profile['profile_path'],
         'nav2_params_path': nav2_params,
-        'nav2_params_sha256': _sha256_file(nav2_params),
+        'nav2_params_sha256': _sha256_file(nav2_params) if nav2_params else None,
+        # The autopilot half of the same provenance: which parameter file was
+        # fed to ardurover, and which ArduPilot source the firmware in this
+        # image was built from. docker/ardupilot.repos tracks a floating
+        # branch on purpose, so the SHA recorded here is what makes a run
+        # traceable to a build rather than to a branch name.
+        'autopilot_parm_path': autopilot_parm,
+        'autopilot_parm_sha256': _sha256_file(autopilot_parm) if autopilot_parm else None,
+        'firmware_sha': _firmware_sha(),
+        'firmware_sha_source': (f'{FIRMWARE_VERSION_PATH}, written by '
+                                'docker/build_overlay.sh'),
         'scenario_path': scenario_path,
         'scenario_sha256': _sha256_file(scenario_path),
         'launch_command': launch_command,
-        'record_topics': list(RECORD_TOPICS),
+        'record_topics': list(record_topics),
         'bag_qos_overrides_path': qos_overrides,
         'bag_qos_overrides_sha256': _sha256_file(qos_overrides),
         'gate_reference': 'docs/gate.md',
@@ -1143,18 +1229,25 @@ def run(argv=None) -> int:
         'initial_map': list(initial_map),
         'initial_world': list(poses['initial']['world']),
         'world_to_map': list(wtm),
+        # Measured per run by the car's ekf_local_tf and reported by the
+        # MAVROS driver; null for a platform whose estimate is already in
+        # `map`, with no claim either way.
+        'world_to_ekf_local': None,
         'recorder_unsubscribed_topics': None,
         'bumper_liveness': None,
         'initial_yaw_aligned': None,
         'initial_yaw_error_rad': None,
+        'initial_yaw_detail': None,
         'localization_converged': None,
         'localization_cov_trace': None,
         'localization_converged_sim_s': None,
+        'localization_detail': None,
         'warmup_total_sim_s': None,
         'preflight_initial': None,
         'preflight': None,
         'mission_state': None,
         'outcome': None,
+        'mission_driver': profile['mission_driver'],
         'nav2_status_code': None,
         'nav2_status_name': None,
         'detail': None,
@@ -1165,7 +1258,8 @@ def run(argv=None) -> int:
     }
 
     rclpy.init()
-    node = ScenarioRunner(scenario['experiment_id'])
+    node = ScenarioRunner(scenario['experiment_id'], profile, wtm)
+    driver = build_driver(node, profile, record)
     launch_log = open(os.path.join(run_dir, 'launch.log'), 'w')
     launch = subprocess.Popen(launch_command, stdout=launch_log,
                               stderr=subprocess.STDOUT, start_new_session=True)
@@ -1174,40 +1268,36 @@ def run(argv=None) -> int:
     exit_code = EXIT_OK
 
     try:
-        # 5. Bring-up gate. A stack that never comes up is a failed run with
-        # artifacts, not a traceback.
-        needed = {
-            '/clock': lambda: node.sim_now() > 0.0,
-            '/odom': lambda: node.odom is not None,
-            '/ground_truth/odom': lambda: node.truth is not None,
-            '/scan': lambda: node.scan is not None,
-            '/map': lambda: node.grid is not None,
-        }
-        deadline = time.monotonic() + BRINGUP_WALL_LIMIT
+        # 5. Bring-up gate, from the profile: every topic it declares must
+        # have delivered a message. A stack that never comes up is a failed
+        # run with artifacts, not a traceback.
+        needed = dict.fromkeys(node.bringup_seen, False)
+        bringup_limit = float(profile['bringup_wall_limit_s'])
+        deadline = time.monotonic() + bringup_limit
         missing = list(needed)
         while time.monotonic() < deadline:
             node.spin_wall(0.5)
-            missing = [topic for topic, ready in needed.items() if not ready()]
+            missing = [topic for topic in needed
+                       if not (node.bringup_seen[topic]
+                               or (topic == '/clock' and node.sim_now() > 0.0))]
             if not missing:
                 break
         if missing:
-            record['outcome'] = 'bringup_failed'
+            record['outcome'] = 'runner:bringup_failed'
             record['mission_state'] = 'none'
             record['detail'] = (f'no messages on {", ".join(missing)} within '
-                                f'{BRINGUP_WALL_LIMIT:.0f} s wall; see launch.log')
+                                f'{bringup_limit:.0f} s wall; see launch.log')
             raise RunAbort(EXIT_BRINGUP, record['detail'])
 
-        nav_client = ActionClient(node, NavigateToPose, 'navigate_to_pose')
-        server_deadline = time.monotonic() + ACTION_SERVER_WALL_LIMIT
-        while time.monotonic() < server_deadline and not nav_client.server_is_ready():
-            node.spin_wall(0.5)
-        if not nav_client.server_is_ready():
-            record['outcome'] = 'bringup_failed'
+        # The autonomy stack's own readiness, asked of the driver: a Nav2
+        # action server for one platform, a live MAVLink link and the mode and
+        # arming services for the other. The refusal names which was missing.
+        not_ready = driver.wait_ready(STACK_READY_WALL_LIMIT)
+        if not_ready:
+            record['outcome'] = 'runner:bringup_failed'
             record['mission_state'] = 'none'
-            record['detail'] = (
-                f'navigate_to_pose never appeared within {ACTION_SERVER_WALL_LIMIT:.0f} s '
-                'wall; Nav2 did not activate (see launch.log)')
-            raise RunAbort(EXIT_BRINGUP, record['detail'])
+            record['detail'] = not_ready
+            raise RunAbort(EXIT_BRINGUP, not_ready)
 
         record['sim_start'] = node.sim_now()
         print(f'--- stack up at sim t={record["sim_start"]:.2f} s', flush=True)
@@ -1215,20 +1305,21 @@ def run(argv=None) -> int:
         # 5b. Prove the contact path exists NOW, while the world is up. A gz
         # contact sensor publishes only on contact, so without this
         # `collision_count: 0` cannot be told from a dead bridge.
-        record['bumper_liveness'] = bumper_liveness(node, scenario['world'])
+        record['bumper_liveness'] = bumper_liveness(node, scenario['world'], model)
         print(f'--- bumper liveness {record["bumper_liveness"]}', flush=True)
 
-        # 6. Record BEFORE localizing: the warm-up rotation, /initialpose and
-        # AMCL's convergence are evidence, and metrics.py windows them out by
-        # the mission window rather than by never having recorded them.
+        # 6. Record BEFORE the driver prepares: a localization warm-up, an
+        # /initialpose, a mode change and an arming are all evidence, and
+        # metrics.py windows them out by the mission window rather than by
+        # never having recorded them.
         bag_dir = os.path.join(run_dir, 'bag')
         recorder_log = open(os.path.join(run_dir, 'bag_record.log'), 'w')
         recorder = subprocess.Popen(
             ['ros2', 'bag', 'record', '-s', 'mcap', '-o', bag_dir, '--use-sim-time',
              '--include-hidden-topics', '--qos-profile-overrides-path', qos_overrides,
-             *RECORD_TOPICS],
+             *record_topics],
             stdout=recorder_log, stderr=subprocess.STDOUT, start_new_session=True)
-        unrecorded = wait_for_recorder(node)
+        unrecorded = wait_for_recorder(node, recorder_gate_topics)
         record['recorder_unsubscribed_topics'] = unrecorded
         if unrecorded:
             print(f'--- WARNING: the recorder never subscribed to {unrecorded} within '
@@ -1242,17 +1333,19 @@ def run(argv=None) -> int:
             MissionState.STATE_IDLE, goal_pose,
             detail='stack up, goal not yet sent; `goal` is the goal that will be sent')
 
-        # 8. Localize. AMCL updates on MOTION (update_min_d 0.1, update_min_a
-        # 0.2), so a robot standing still never resamples and its covariance
-        # stays at whatever /initialpose declared - measured: trace 0.4474
-        # after 30 s sim. The in-place rotation gives the filter angular
-        # motion and returns the body to the same xy.
+        # 8. Pre-flight, then whatever this platform does before a goal.
         #
         # The scenario's START pose gets the same footprint check as the goal,
-        # BEFORE /initialpose is published: a start inside a wall produces a
-        # run whose estimate error has no explanation, and the body is already
+        # BEFORE anything is published: a start inside a wall produces a run
+        # whose estimate error has no explanation, and the body is already
         # standing there by the time anything else could notice.
-        preflight_initial = preflight_goal(node.grid, initial_map, robot_radius_m,
+        #
+        # The grid is the stack's own /map where the platform publishes one,
+        # and the COMMITTED map otherwise: the car runs no map_server, but the
+        # same static grid is what its scenarios were authored against and
+        # what every metric is scored in.
+        grid = node.grid if node.grid is not None else occupancy_grid_from_pgm(map_yaml)
+        preflight_initial = preflight_goal(grid, initial_map, robot_radius_m,
                                            occupied_thresh)
         preflight_initial['robot_radius_m'] = robot_radius_m
         preflight_initial['robot_radius_sources'] = radius_sources
@@ -1261,134 +1354,89 @@ def run(argv=None) -> int:
         if not preflight_initial['ok']:
             node.publish_mission_state(
                 MissionState.STATE_UNREACHABLE, goal_pose,
-                outcome='not_sent:initial_pose_occupied',
+                outcome='runner:not_sent:initial_pose_occupied',
                 detail=preflight_initial['detail'])
             record['mission_state'] = MissionState.STATE_UNREACHABLE
-            record['outcome'] = 'not_sent:initial_pose_occupied'
+            record['outcome'] = 'runner:not_sent:initial_pose_occupied'
             record_undispatched(
-                record, scenario['interventions'], scenario['world'],
+                record, scenario['interventions'], scenario['world'], model,
                 'start_pose_refused',
                 'the scenario start pose was refused pre-flight, so no mission ran')
             record['rtf_samples'] = measure_rtf(scenario['world'])
             raise RunAbort(EXIT_OK, 'start pose refused pre-flight; no goal sent')
 
-        node.amcl = None
-        initialpose_sim = node.sim_now()
-        for _ in range(3):
-            node.publish_initial_pose(*initial_map)
-            node.spin_wall(0.5)
-
-        def converged():
-            if node.amcl is None:
-                return False
-            cov = node.amcl.pose.covariance
-            return cov[0] + cov[7] + cov[35] < COVARIANCE_LIMIT
-
-        did_converge = node.spin_sim(AMCL_CONVERGE_SIM,
-                                     cmd=twist(angular_z=AMCL_WARMUP_RATE),
-                                     until=converged)
-        if did_converge:
-            # Keep rotating so the converged filter publishes more than the one
-            # sample est_error_at_start_pose_m would otherwise be averaged over.
-            node.spin_sim(AMCL_FLOOR_SAMPLE_SIM, cmd=twist(angular_z=AMCL_WARMUP_RATE))
-        node.stop()
-        node.spin_sim(AMCL_SETTLE_SIM)
-        # The warm-up rotation ends wherever convergence happened to land, so
-        # without this the body faces an ARBITRARY direction when the goal is
-        # sent - while the scenario declares an initial yaw. Measured: a run
-        # that ended facing away from the goal had DWB reverse at 0.1 m/s for
-        # 40 s, taking 76 s sim against 37 s for the same path driven forward.
-        # That is real Nav2 behaviour, but it is a response to a heading no
-        # scenario asked for, and it makes two runs of one scenario
-        # incomparable. Aligning uses the robot's OWN estimate (/amcl_pose),
-        # never ground truth: closing this loop on truth would be exactly the
-        # localization shortcut this project forbids.
-        aligned, yaw_error = align_to_initial_yaw(node, initial_map[2])
-        record['initial_yaw_aligned'] = aligned
-        record['initial_yaw_error_rad'] = yaw_error
-        if not aligned:
-            print(f'--- WARNING: could not align to the scenario initial yaw within '
-                  f'{YAW_ALIGN_SIM:.0f} s sim; estimated yaw error {yaw_error} rad. The '
-                  'mission starts from a different heading than the scenario declares',
-                  flush=True)
-        record['localization_converged'] = bool(did_converge)
-        # Two different quantities, under two different names. The convergence
-        # time is observed in the AMCL callback at the instant the trace first
-        # fell below the limit; the warm-up total also covers the extra
-        # rotation, the settle and the yaw alignment that follow it.
-        record['localization_converged_sim_s'] = (
-            node.converged_sim - initialpose_sim if node.converged_sim is not None
-            else None)
-        record['warmup_total_sim_s'] = node.sim_now() - initialpose_sim
-        if node.amcl is not None:
-            cov = node.amcl.pose.covariance
-            record['localization_cov_trace'] = cov[0] + cov[7] + cov[35]
-        # Non-convergence is DATA. A run that navigates badly because the
-        # filter never converged is a result; raising COVARIANCE_LIMIT to make
-        # it look clean would not be.
-        if not did_converge:
-            print(f'--- AMCL did not converge within {AMCL_CONVERGE_SIM:.0f} s sim '
-                  f'(trace {record["localization_cov_trace"]}); continuing', flush=True)
+        # 8b. The driver's own pre-goal work: a localization warm-up for the
+        # Nav2 platform, a mode change and arming for the autopilot. A refusal
+        # here ends the run before any goal is sent, with the driver's reason.
+        refusal = driver.prepare(initial_map, record)
+        if refusal:
+            outcome, detail = refusal
+            node.publish_mission_state(MissionState.STATE_REJECTED, goal_pose,
+                                       outcome=outcome, detail=detail)
+            record['mission_state'] = MissionState.STATE_REJECTED
+            record['outcome'] = outcome
+            record['detail'] = detail
+            record_undispatched(
+                record, scenario['interventions'], scenario['world'], model,
+                'stack_not_ready',
+                'the stack could not be prepared to accept a goal, so no mission ran')
+            record['rtf_samples'] = measure_rtf(scenario['world'])
+            raise RunAbort(EXIT_OK, detail)
 
         # 9. Pre-flight. The only path to `unreachable`.
-        preflight = preflight_goal(node.grid, goal_map, robot_radius_m, occupied_thresh)
+        preflight = preflight_goal(grid, goal_map, robot_radius_m, occupied_thresh)
         preflight['robot_radius_m'] = robot_radius_m
         preflight['robot_radius_sources'] = radius_sources
         preflight['occupied_thresh'] = occupied_thresh
         record['preflight'] = preflight
         if not preflight['ok']:
+            # `runner:` is the SOURCE prefix every outcome carries: the gate
+            # that refused is this runner's, not either stack's. It is added
+            # here as well as in the record so the published value and the
+            # recorded one are the same member of the closed set.
+            outcome = f'runner:{preflight["outcome"]}'
             node.publish_mission_state(MissionState.STATE_UNREACHABLE, goal_pose,
-                                       outcome=preflight['outcome'],
+                                       outcome=outcome,
                                        detail=preflight['detail'])
             record['mission_state'] = MissionState.STATE_UNREACHABLE
-            record['outcome'] = preflight['outcome']
+            record['outcome'] = outcome
             record_undispatched(
-                record, scenario['interventions'], scenario['world'], 'goal_unreachable',
+                record, scenario['interventions'], scenario['world'], model,
+                'goal_unreachable',
                 'the goal was refused pre-flight, so no mission ran')
             record['rtf_samples'] = measure_rtf(scenario['world'])
             raise RunAbort(EXIT_OK, 'goal refused pre-flight; no goal sent')
 
-        # 10. Send the goal.
-        feedback = {'count': 0, 'distance_remaining': None, 'number_of_recoveries': None}
-
-        def on_feedback(message):
-            feedback['count'] += 1
-            feedback['distance_remaining'] = message.feedback.distance_remaining
-            feedback['number_of_recoveries'] = message.feedback.number_of_recoveries
-            if feedback['count'] == 1:
-                node.publish_mission_state(
-                    MissionState.STATE_NAVIGATING, goal_pose,
-                    detail='first action feedback received; the server is executing')
-
-        goal = NavigateToPose.Goal()
-        goal.pose = goal_pose
-        send_future = nav_client.send_goal_async(goal, feedback_callback=on_feedback)
-        node.spin_sim(GOAL_ACCEPT_WAIT_SIM, until=send_future.done)
-        handle = send_future.result() if send_future.done() else None
-        if handle is None or not handle.accepted:
-            # NOT `aborted`: no GoalStatus was ever produced for a goal the
-            # server refused, and `aborted` names STATUS_ABORTED (6).
-            detail = ('no response to the goal request' if handle is None
-                      else 'the action server refused the goal')
+        # 10. Send the goal, through the driver. What "sent" means differs:
+        # an accepted action goal for Nav2, a published setpoint for the
+        # autopilot, which acknowledges nothing. The driver's detail says
+        # which, so run.json cannot read as a stronger claim than was made.
+        accepted, outcome, detail = driver.send_goal(goal_pose, record)
+        if not accepted:
+            # The driver NAMES the outcome; the runner does not infer one by
+            # inspecting the detail string, which is prose written for an
+            # operator and is not a protocol.
             node.publish_mission_state(MissionState.STATE_REJECTED, goal_pose,
-                                       outcome='not_accepted', detail=detail)
+                                       outcome=outcome, detail=detail)
             record['mission_state'] = MissionState.STATE_REJECTED
-            record['outcome'] = 'not_accepted'
+            record['outcome'] = outcome
             record_undispatched(
-                record, scenario['interventions'], scenario['world'], 'goal_not_accepted',
-                'the action server did not accept the goal, so no mission ran')
+                record, scenario['interventions'], scenario['world'], model,
+                'goal_not_accepted',
+                'the stack did not accept the goal, so no mission ran')
             record['rtf_samples'] = measure_rtf(scenario['world'])
             raise RunAbort(EXIT_OK, detail)
 
         t_accept = node.sim_now()
         record['t_accept_sim'] = t_accept
-        record['goal_uuid'] = bytes(handle.goal_id.uuid).hex()
         node.publish_mission_state(MissionState.STATE_GOAL_ACCEPTED, goal_pose,
-                                   detail=f'goal_id {record["goal_uuid"]}')
-        result_future = handle.get_result_async()
+                                   detail=detail)
+        navigating_published = False
 
         # 11. Mission loop. A single spin_sim(until=...) would not do: the
-        # interventions have to fire on SIM time while the goal is running.
+        # interventions have to fire on SIM time while the goal is running,
+        # and the driver has to be spun for its own supervision and - for a
+        # platform commanded by setpoint - its republication.
         pending = list(scenario['interventions'])
         timeout_sec = scenario['timeout_sec']
         canceled = False
@@ -1398,14 +1446,23 @@ def run(argv=None) -> int:
         # slow real-time factor must change how long a run takes, never what it
         # measures, so this can only fire when /clock has stopped advancing.
         # Without it, a gz server that dies mid-mission freezes sim_now(), and
-        # both loop exits (result_future.done() and the cancel deadline) depend
-        # on it - the runner would spin for ever with the recorder still up.
+        # both loop exits (the driver's terminal and the cancel deadline)
+        # depend on it - the runner would spin for ever with the recorder up.
         mission_wall_deadline = time.monotonic() + timeout_sec * 10.0 + 120.0
         last_sim = node.sim_now()
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.02)
-            if result_future.done():
+            driver.spin_once()
+            if driver.terminal() is not None:
                 break
+            # The runner is the only publisher of /mission_state, so the
+            # transition the driver OBSERVED is published here, once.
+            if not navigating_published and driver.navigating_since is not None:
+                navigating_published = True
+                node.publish_mission_state(
+                    MissionState.STATE_NAVIGATING, goal_pose,
+                    detail='the stack was observed executing the goal at sim '
+                           f'{driver.navigating_since:.2f} s')
             elapsed = node.sim_now() - t_accept
             last_sim = node.sim_now()
             if pending and elapsed >= pending[0]['at_sec']:
@@ -1413,12 +1470,13 @@ def run(argv=None) -> int:
                 print(f'--- intervention {intervention["id"]} at {elapsed:.2f} s sim '
                       f'(scheduled {intervention["at_sec"]:.2f})', flush=True)
                 record['interventions'].append(
-                    dispatch_intervention(node, intervention, scenario['world'], elapsed))
+                    dispatch_intervention(node, intervention, scenario['world'],
+                                          model, elapsed))
                 continue
             if not canceled and elapsed >= timeout_sec:
-                print(f'--- timeout at {elapsed:.1f} s sim; cancelling the goal',
+                print(f'--- timeout at {elapsed:.1f} s sim; asking the stack to stop',
                       flush=True)
-                handle.cancel_goal_async()
+                driver.request_cancel('timeout')
                 canceled = True
                 cancel_deadline = node.sim_now() + CANCEL_WAIT_SIM
             if canceled and node.sim_now() > cancel_deadline:
@@ -1431,42 +1489,35 @@ def run(argv=None) -> int:
         # at_sec >= timeout_sec, so one scheduled past the ACTUAL mission
         # duration is legal and would otherwise leave no trace at all.
         record_undispatched(
-            record, pending, scenario['world'], 'mission_ended_first',
+            record, pending, scenario['world'], model, 'mission_ended_first',
             f'the mission ended at {node.sim_now() - t_accept:.2f} s sim, before this '
             'intervention\'s at_sec')
 
-        # 12/13. Terminal handling. The outcome is the literal GoalStatus
-        # name, never a phrase, and never inferred when it is absent.
-        detail = (f'distance_remaining={feedback["distance_remaining"]}, '
-                  f'number_of_recoveries={feedback["number_of_recoveries"]}'
-                  if feedback['count'] else 'no action feedback was received')
-        if result_future.done():
-            status = result_future.result().status
-            record['nav2_status_code'] = int(status)
-            # A non-terminal status as the FINAL one is not an abort: it is a
-            # status whose meaning for a finished mission is unknown.
-            state, outcome = TERMINAL_STATES.get(
-                status, (MissionState.STATE_UNKNOWN, f'unknown:status_{int(status)}'))
-            record['nav2_status_name'] = outcome
+        # 12/13. Terminal handling. The outcome is whatever the stack itself
+        # reported, carrying the prefix of the system that reported it, and is
+        # never inferred when it is absent.
+        terminal = driver.terminal()
+        if terminal is not None:
+            state, outcome, detail = terminal
         elif stalled:
-            status = None
             state = MissionState.STATE_UNKNOWN
-            outcome = 'unknown:clock_stalled'
-            detail = (f'{detail}; /clock stopped advancing: last sim time seen '
-                      f'{last_sim:.2f} s after {timeout_sec * 10.0 + 120.0:.0f} s wall, '
-                      f'and the goal was {"cancelled" if canceled else "not cancelled"}')
+            outcome = 'runner:unknown:clock_stalled'
+            detail = (f'{driver.no_terminal_detail()}; /clock stopped advancing: last '
+                      f'sim time seen {last_sim:.2f} s after '
+                      f'{timeout_sec * 10.0 + 120.0:.0f} s wall, and the stack was '
+                      f'{"asked to stop" if canceled else "not asked to stop"}')
         else:
-            status = None
-            # NOT `canceled`: STATUS_CANCELED is a status the server sends, and
-            # none arrived. The cancel is reported in `detail` instead.
+            # NOT `canceled`: a cancel is terminal only when the stack says so,
+            # and none did. The cancel is reported in `detail` instead.
             state = MissionState.STATE_UNKNOWN
-            outcome = 'unknown:no_terminal_status'
-            detail = (f'{detail}; no terminal status arrived '
+            outcome = 'runner:unknown:no_terminal_status'
+            detail = (f'{driver.no_terminal_detail()}; no terminal result arrived '
                       + (f'within {CANCEL_WAIT_SIM:.0f} s sim of the cancel'
                          if canceled else 'and the mission loop ended'))
         record['t_terminal_sim'] = node.sim_now()
         record['mission_state'] = state
         record['outcome'] = outcome
+        record['detail'] = detail
         node.publish_mission_state(state, goal_pose, outcome=outcome, detail=detail)
         node.spin_sim(POST_TERMINAL_SIM)
         record['rtf_samples'] = measure_rtf(scenario['world'])
@@ -1476,11 +1527,18 @@ def run(argv=None) -> int:
         print(f'--- run stopped: {abort}', flush=True)
     except Exception:                                   # noqa: BLE001 - reported, not hidden
         exit_code = EXIT_ARTIFACTS
-        record['outcome'] = record['outcome'] or 'runner_exception'
+        record['outcome'] = record['outcome'] or 'runner:exception'
         record['detail'] = traceback.format_exc()
         traceback.print_exc()
     finally:
         record['sim_end'] = node.sim_now()
+        # The plant first, while the node and the stack are both still alive:
+        # a driver that has armed an autopilot or left a velocity standing has
+        # to undo it, and it cannot once rclpy is down.
+        try:
+            driver.stop()
+        except Exception:                               # noqa: BLE001 - reported
+            traceback.print_exc()
         node.destroy_node()
         rclpy.shutdown()
 
@@ -1512,10 +1570,15 @@ def run(argv=None) -> int:
     # 16. The bag must be present AND finalised AND carry the pinned latched
     # topics. `metadata.yaml` is written by the recorder on shutdown, so its
     # absence means SIGKILL truncated the run; a parsed metadata with zero
-    # messages, or without the single /map and the two /tf_static messages the
-    # QoS override pins, means the recorder ran but the evidence is not there.
-    # Converting that into a failed run is the point: the alternative is an
-    # empty panel A that looks like a plotting bug.
+    # messages, or short of the latched messages the QoS override pins, means
+    # the recorder ran but the evidence is not there. Converting that into a
+    # failed run is the point: the alternative is an empty panel A that looks
+    # like a plotting bug.
+    #
+    # WHICH latched topics are pinned is per robot: /tf_static exists for
+    # every platform, /map only for one that runs a map_server. The car
+    # localizes against GPS and an IMU and records no /map at all, and pinning
+    # one would fail every car run for a message its stack never publishes.
     bag_dir = os.path.join(run_dir, 'bag')
     has_metadata = os.path.isfile(os.path.join(bag_dir, 'metadata.yaml'))
     has_mcap = os.path.isdir(bag_dir) and any(
@@ -1530,7 +1593,9 @@ def run(argv=None) -> int:
             counts = {entry['topic_metadata']['name']: int(entry['message_count'])
                       for entry in meta.get('topics_with_message_count', [])}
             total = int(meta.get('message_count', 0))
-            required = {'/map': 1, '/tf_static': 2}
+            required = {'/tf_static': 2}
+            if '/map' in record_topics:
+                required['/map'] = 1
             short = {name: counts.get(name, 0) for name, least in required.items()
                      if counts.get(name, 0) < least}
             recorded = {name: counts.get(name, 0) for name in required}
@@ -1545,12 +1610,13 @@ def run(argv=None) -> int:
                           f'({type(exc).__name__}: {exc}), so the bag is not finalised')
     if exit_code == EXIT_OK and not bag_ok:
         exit_code = EXIT_BAG
-        record['outcome'] = record['outcome'] or 'bag_missing'
+        record['outcome'] = record['outcome'] or 'runner:bag_missing'
         record['detail'] = f'{bag_detail}; the run cannot be measured'
         print(f'BAG UNUSABLE: {record["detail"]}', file=sys.stderr, flush=True)
 
     record['finished_utc'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     record['exit_code'] = exit_code
+    _warn_unknown_outcome(record)
     write_json(os.path.join(run_dir, 'run.json'), record)
 
     if exit_code in (EXIT_BRINGUP, EXIT_BAG):
@@ -1569,11 +1635,27 @@ def run(argv=None) -> int:
               f'`ros2 run ral_eval compute_metrics --run-dir {run_dir}`',
               file=sys.stderr, flush=True)
         record['exit_code'] = EXIT_ARTIFACTS
+        _warn_unknown_outcome(record)
         write_json(os.path.join(run_dir, 'run.json'), record)
         return EXIT_ARTIFACTS
 
     print(f'--- run complete: {run_dir} (exit {exit_code})', flush=True)
     return exit_code
+
+
+def _warn_unknown_outcome(record: dict) -> None:
+    """
+    Shout when run.json is about to carry an outcome outside the closed set.
+
+    A warning rather than a refusal: an unknown outcome is a defect in the
+    vocabulary, and losing the run's artifacts to it would destroy the
+    evidence needed to fix it. publish_mission_state is the strict gate; this
+    covers the outcomes the runner writes without publishing a MissionState.
+    """
+    outcome = record.get('outcome') or ''
+    if outcome and not outcome_is_known(outcome):
+        print(f'--- WARNING: outcome {outcome} is not in mission_driver.OUTCOMES',
+              file=sys.stderr, flush=True)
 
 
 def main(args=None) -> None:

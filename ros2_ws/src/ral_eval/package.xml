@@ -43,6 +43,16 @@
   <exec_depend>python3-matplotlib</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
 
+  <!-- Phase 5, the car. mavros_msgs carries State, EstimatorStatus,
+       NavControllerOutput and the SetMode/CommandBool services the MAVROS
+       mission driver uses (mavros_driver.py); tf2_ros is the broadcaster
+       ekf_local_tf.py publishes map -> ekf_local -> base_link with;
+       rosgraph_msgs is /clock's Clock type, which the generic bring-up gate
+       subscribes to by the type name a robot profile declares. -->
+  <exec_depend>mavros_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

@@ -1,0 +1,124 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# HALF OF A PAIR. Its sibling is narrow_doorway_roomba.yaml: identical world,
+# identical initial_pose, identical goal, differing only in `robot` and
+# `experiment_id`. Together they are the MVP's "two genuinely different robots"
+# acceptance evidence - one mission put to two platforms whose motion
+# constraints, planning and arrival rules are different, with the difference
+# reported from what the runs measured rather than from what was expected.
+#
+# The goal is in room 3, reachable from room 2 only through wall B's 0.70 m
+# doorway at (8.0, 3.0) (ral_apartment.sdf wall_b_lower/wall_b_upper).
+#
+# THE START AND GOAL ARE CHOSEN SO THE STRAIGHT LINE THREADS BOTH DOORWAYS
+# WITH THE TWO BINDING MARGINS EQUAL, AND SO ARRIVING REQUIRES PASSING WALL B.
+# Both halves of that matter, and both were COMPUTED from the world SDF rather
+# than assumed.
+#
+# Threading: ArduRover has no path planner and no obstacle avoidance - in
+# GUIDED it steers at the target - so a mission whose straight line crosses
+# solid wall tests only that it cannot route around geometry, which is
+# already known and is not the question here. Wall A's gap is y in
+# [3.55, 4.45] at x = 4.0 and wall B's is y in [2.65, 3.35] at x = 8.0.
+#
+# The car is 0.50 x 0.30, so what has to fit is not its width but the band its
+# BODY sweeps while holding the line's heading: for a slope -0.2 line that
+# half-band is 0.25*|sin(atan(-0.2))| + 0.15*|cos(atan(-0.2))| = 0.196 m, not
+# 0.15 m. The committed line y = 4.65 - 0.2x is the one that equalises the two
+# margins that bind: it crosses wall A at 3.85 (swept band [3.654, 4.046],
+# 0.104 m clear of the gap's lower edge, 0.404 m of its upper) and wall B at
+# 3.05 (swept band [2.854, 3.246], 0.204 m clear below and 0.104 m above).
+# Its swept lower edge passes 0.204 m clear of furniture_c, which spans
+# x in [9, 10], y in [1.75, 2.25]; that minimum is at x = 10.
+#
+# Slope -0.25 - the line through both gap CENTRES - was rejected: it leaves
+# 0.144 m at each wall but only 0.044 m at furniture_c, so it is worse on the
+# binding constraint.
+#
+# Arriving: this platform's arrival is a conjunction - the FCU's own wp_dist
+# inside WP_RADIUS 1.0 m AND the robot's own estimate within
+# arrival_estimate_tolerance_m 1.5 m of the commanded setpoint. wp_dist is a
+# uint16 in METRES that TRUNCATES, so the FCU half alone could be satisfied
+# up to 2 m out; the estimate-side gate is what bounds where the vehicle may
+# come to rest. MEASURED before that gate existed, with the goal at
+# (10.5, 3.0): the car reported `mavros:reached_wp_radius` having got no
+# further than x = 7.61 - it never reached wall B's face at x = 7.95 at all,
+# and the run claimed a doorway transit that never happened. The goal is kept
+# well past wall B so that arriving at all requires crossing it.
+#
+# EXPECTATION WHEN THIS PAIR WAS WRITTEN, from geometry: the Roomba passes,
+# the car does not. The Roomba's footprint radius is 0.18 m and it rotates in
+# place, so it can square up to the gap. The car is 0.30 m wide with a
+# 0.292 m footprint radius - it FITS - but it cannot aim: its minimum turning
+# radius is 0.611 m (wheelbase 0.35 / tan(0.52)), so a heading error carried
+# into the 0.70 m gap cannot be corrected inside the gap's own length. The
+# predicted outcomes for the car were `mavros:stalled_no_progress` or
+# `mavros:canceled_timeout`.
+#
+# THAT EXPECTATION WAS MEASURED TO BE WRONG. It held for the configuration it
+# was written against - a 35 rad/s rear-wheel multiplier, which made full
+# throttle 1.05 m/s and cruise throttle about 0.52 m/s, and an aim point
+# 0.10 m above wall B's gap centre. With the actuator resized to 70 (the
+# arithmetic in ral_car/model.sdf now includes the -0.5 offset it always
+# defined) and the line recentred so the two binding margins are equal, the
+# car goes through.
+#
+# MEASURED RESULT, this scenario and its sibling, same world and same poses,
+# truth from /ground_truth/odom:
+#
+#   roomba  nav2:STATUS_SUCCEEDED in 29.9 s sim. Crossed wall A at y = 4.019
+#           and wall B at y = 2.997 (gap centre 3.00), finished at
+#           (11.453, 2.453), goal_pose_error_m 0.113, 0 collisions,
+#           path 10.71 m. (runs/narrow_doorway_roomba_20261025T132534Z)
+#   car     mavros:reached_wp_radius in 11.1 s sim. Crossed wall A at
+#           y = 4.099 (gap [3.55, 4.45]) and wall B at y = 3.071
+#           (gap [2.65, 3.35]), finished at (11.318, 2.121),
+#           goal_pose_error_m 1.397, 0 collisions, path 9.35 m, mean achieved
+#           speed 0.847 m/s. (runs/narrow_doorway_car_20261025T132108Z)
+#           It stops 1.40 m short of the goal because that is the resolution
+#           of its own arrival rule - wp_dist inside WP_RADIUS 1.0 m AND its
+#           estimate within 1.5 m of the setpoint - not because anything
+#           stopped it.
+#
+# The car does NOT follow the aim line exactly, and the measured crossings
+# above say by how much: it is spawned at yaw 0 (heading +x) and steers at the
+# goal from wherever it is, so its path lags the chord - wall A crossed at
+# y = 4.099 against the line's 3.85, wall B at 3.071 against 3.05. The line is
+# the aim point, not a trajectory; the margins computed from it are what the
+# vehicle has to work with, not what it used.
+#
+# The pair is still the MVP's two-robot acceptance evidence, but what it now
+# shows is a DIFFERENT difference, and a measured one: the Roomba plans a
+# route and takes 29.9 s over 10.71 m; the car has no planner, drives the
+# straight line it was aimed along, and crosses both gaps in 11.1 s over
+# 9.35 m, with no path, no obstacle avoidance and no ability to recover if the
+# aim had been wrong. Its 0.611 m minimum turning radius and its inability to
+# rotate in place are unchanged and still measured (car_nav_check check 9);
+# what changed is that this particular mission no longer demands more of them
+# than the plant has.
+#
+# NEITHER FILE MAY BE EDITED TO MAKE EITHER OUTCOME COME OUT A PARTICULAR WAY.
+# The doorway width is fixed by the world SDF, which the committed map and
+# every baseline belong to. A measured result that contradicts the plan is
+# evidence; a narrower doorway would be a fake.
+
+experiment_id: narrow_doorway_car
+robot: car
+world: ral_apartment
+seed: 1
+initial_pose: {x: 1.0, y: 4.45, yaw: 0.0}
+goal: {x: 11.5, y: 2.35, yaw: 0.0}
+timeout_sec: 180
+interventions: []

@@ -1,0 +1,69 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The kidnapped-robot problem on an autopilot. At 25 s sim the body is
+# teleported to (2.0, 6.5) in the gz WORLD frame while nothing tells the
+# estimator.
+#
+# What this does to EKF3 is NOT what it does to AMCL, and the difference is
+# the point of running it on both platforms. SITL synthesises GPS from the
+# position ArduPilotPlugin reports, so the GPS position JUMPS while the IMU
+# reports no acceleration at all. EKF3 therefore sees a position innovation
+# that its own motion model says is impossible.
+#
+# Expected outcomes, ALL valid and reported as whatever happens: the filter
+# rejects the innovation for a while and then resets to the new position, and
+# the mission continues from there; or an EKF failsafe fires and the autopilot
+# leaves GUIDED by itself, which this harness reports as
+# `mavros:mode_changed:<MODE>` - a terminal, non-success outcome naming the
+# mode the FCU chose; or the vehicle drives against a world it believes it is
+# elsewhere in and the no-progress policy stops it. Nothing resets the filter
+# by hand: an estimator that is told where it is has not recovered.
+#
+# The destination is clear of furniture_a at (2.0, 5.5) with half-extents
+# 0.4 x 0.3 (its near face is y = 5.8, 0.7 m away, more than the car's 0.292 m
+# footprint radius) and of the north wall, whose inner face is y = 7.95. The
+# pose is NOT converted through world_to_map: gz entity poses are defined in
+# `world`.
+#
+# What is measured either way: teleport_excluded_m should be about the
+# teleport distance (path_length_m excludes the jump, because the vehicle did
+# not drive it) and est_error_max_m should spike to roughly the same number at
+# the activation stamp.
+#
+# HONESTY NOTE (fault_catalogue.yaml): this teleports the body. Linear and
+# angular velocity are NOT zeroed, so the vehicle keeps the twist it had, and
+# z is set by the manager from the profile's kidnap_z_m (the scenario schema
+# has no z).
+#
+# THE MISSION IS SHORT, AND THE TELEPORT TIME FOLLOWS FROM THAT. This platform
+# drives straight at its target and stops when the FCU's own wp_dist falls
+# inside WP_RADIUS, which with wp_dist truncated to whole metres happens up to
+# 3 m early; MEASURED, the baseline mission is 5.4 s sim end to end. A
+# teleport at 25 s sim never fired at all (`not_dispatched:mission_ended_first`
+# in run.json), which reads as a baseline run wearing a fault scenario's name.
+# 2.5 s sim puts it on a vehicle that is moving, with mission left for EKF3 to
+# react in; the goal is extended to the far side of room 2 for the same reason.
+
+experiment_id: kidnap_car
+robot: car
+world: ral_apartment
+seed: 1
+initial_pose: {x: 1.0, y: 4.0, yaw: 0.0}
+goal: {x: 7.5, y: 4.0, yaw: 0.0}
+timeout_sec: 180
+interventions:
+  - at_sec: 2.5
+    type: kidnap
+    params: {pose: {x: 2.0, y: 6.5, yaw: 0.0}}

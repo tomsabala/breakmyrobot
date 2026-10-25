@@ -40,15 +40,16 @@ from ral_eval.frames import world_pose_to_map
 import yaml
 
 # One legal world until a second one is authored. A second world is not just
-# another SDF: it needs its own bridge_roomba_<world>.yaml (three gz topic
+# another SDF: it needs its own bridge_<robot>_<world>.yaml (three gz topic
 # paths embed the world name), its own slam_toolbox map and its own
 # <world>_frames.yaml alignment.
 ALLOWED_WORLDS = ('ral_apartment',)
 
-# The car-like platform arrives in Phase 5 with its own motion constraints and
-# its own launch file; accepting `car` here would run a Roomba and label the
-# result `car`.
-ALLOWED_ROBOTS = ('roomba',)
+# The robots that are actually INTEGRATED: each has a profile in
+# ral_bringup/config/robots/<robot>.yaml, a gz model, a bridge config and a
+# launch file that brings its own autonomy stack up. Accepting a name with no
+# profile would run one platform and label the result as another.
+ALLOWED_ROBOTS = ('roomba', 'car')
 
 # type -> {param name: required Python type}. This table is also the set of
 # intervention types the runner's DISPATCH must cover; test_mission_vocabulary
@@ -68,9 +69,19 @@ INTERVENTION_PARAMS = {
 # Physically meaningful bounds for the numeric fault parameters, as
 # (minimum, maximum); None means unbounded on that side. A type check alone
 # accepts `dropout_probability: 5.0` and `range_noise_stddev_m: -3.0`, which
-# no fault manager can apply. Bounds come from the modelled hardware:
-# ral_description/models/ral_roomba/model.sdf:109-113 gives the RPLIDAR A1 a
-# 0.15-12.0 m range, and :105-106 a full -pi..pi scan.
+# no fault manager can apply. Bounds come from the modelled hardware: the
+# RPLIDAR A1 as modelled on ral_roomba
+# (ral_description/models/ral_roomba/model.sdf:109-113 gives it a 0.15-12.0 m
+# range, and :105-106 a full -pi..pi scan). They apply to the only platform
+# that can receive the fault, but NOT because this module checks: schema
+# validation here never sees the robot, and `_validate_interventions` takes
+# no profile. The gate is ral_faults/fault_manager.py's, at RUNTIME, and
+# deliberately so - refusing there is what produces the evidence, a `rejected`
+# FaultEvent in the bag carrying the profile's verbatim reason. A scenario
+# that asks for scan_degradation on the car is therefore accepted, dispatched
+# and refused on the record, which is the honest outcome; the car's profile
+# does not list the fault because ral_car carries the same lidar but nothing
+# in its stack consumes it.
 INTERVENTION_PARAM_RANGES = {
     'scan_degradation': {
         'range_noise_stddev_m': (0.0, None),
@@ -383,9 +394,10 @@ def validate_scenario(doc: dict, source: str) -> dict:
     robot = doc['robot']
     if robot not in ALLOWED_ROBOTS:
         raise ScenarioError(
-            f'{source}: `robot` is {robot!r}; the only integrated robot is '
-            f'{ALLOWED_ROBOTS[0]!r}. The car-like platform arrives in Phase 5 with '
-            'its own motion constraints and launch file.')
+            f'{source}: `robot` is {robot!r}; the integrated robots are '
+            f'{list(ALLOWED_ROBOTS)}. A robot is integrated when it has a profile in '
+            'ral_bringup/config/robots/<robot>.yaml naming its gz model, its bridge '
+            'config, its autonomy stack and the faults that are real for it.')
 
     seed = doc['seed']
     if isinstance(seed, bool) or not isinstance(seed, int):
