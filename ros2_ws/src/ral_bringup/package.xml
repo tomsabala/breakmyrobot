@@ -33,6 +33,13 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>teleop_twist_keyboard</exec_depend>
 
+  <!-- Phase 5, the car: car_nav.launch.py starts mavros_node, the only link
+       between ArduRover SITL and ROS. The SITL binary itself (`ardurover`)
+       is not an ament package - it is built by docker/build_overlay.sh into
+       /opt/ardupilot and put on PATH by docker/entrypoint.sh - so there is
+       no rosdep key for it to declare here. -->
+  <exec_depend>mavros</exec_depend>
+
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -1,0 +1,45 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# MAVROS parameters for ral_car. car_nav.launch.py supplies fcu_url and the
+# target system/component; everything here is about what MAVROS may publish.
+#
+# The two settings that matter:
+#
+#   local_position.tf.send: false   MAVROS must NOT broadcast its own
+#     map->base_link TF. ral_eval's ekf_local_tf is the one node that knows
+#     this platform's frame names and the MEASURED offset between the gz
+#     `world` frame and the EKF origin; a second publisher of the same chain
+#     under MAVROS's own frame names would give the tree two parents for
+#     base_link, and the one that wins would depend on timing.
+#
+#   plugin_denylist                 noise reduction only. Every plugin listed
+#     here produces no topic any metric, plot or check reads: there is no
+#     camera on this vehicle (image_pub), no gimbal (mount_control,
+#     gimbal_control) and no airspeed/HUD instrument a ground rover uses
+#     (vfr_hud). NOTHING that produces a recorded topic is on this list -
+#     sys_status, local_position, nav_controller_output, estimator_status,
+#     setpoint_position, command and param all stay loaded.
+
+/**:
+  ros__parameters:
+    local_position:
+      frame_id: "ekf_local"
+      tf:
+        send: false
+    plugin_denylist:
+      - image_pub
+      - mount_control
+      - gimbal_control
+      - vfr_hud

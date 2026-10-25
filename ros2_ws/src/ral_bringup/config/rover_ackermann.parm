@@ -1,0 +1,104 @@
+# ArduRover SITL parameters for ral_car.
+#
+# ardurover is started with --defaults <this file> --wipe, so this file is the
+# entire autopilot configuration for a run: nothing carries over from a previous
+# run's EEPROM. Its sha256 and the ARMING_CHECK value actually used are recorded
+# in the run evidence (docs/car-closed-loop.md) so a reader can tell which
+# autopilot configuration produced a given mission.
+#
+# ArduPilot parses this file itself and accepts only '#' comments, so this
+# header uses '#' rather than the Apache block the project's YAML and Python
+# configs carry.
+
+# --- Frame --------------------------------------------------------------------
+FRAME_CLASS      1      # Rover
+
+# --- Servo outputs: the contract with ral_description/models/ral_car/model.sdf -
+# SERVO1 is ArduPilotPlugin channel 0, SERVO3 is channel 2. The two files must
+# agree; a mismatch sends throttle to the steering knuckles and reads as a
+# control bug rather than as a configuration error.
+SERVO1_FUNCTION  26     # GroundSteering  -> ArduPilotPlugin channel 0
+SERVO3_FUNCTION  70     # Throttle        -> ArduPilotPlugin channel 2
+
+# --- Link to MAVROS -----------------------------------------------------------
+SERIAL0_PROTOCOL 2      # MAVLink2 on SERIAL0, which is where MAVROS attaches
+
+# MAVLink STREAM RATES on SERIAL0, in Hz. With ArduPilot's defaults and MAVROS
+# attached, the telemetry the evidence pipeline reads arrives at about 1 Hz:
+# MAVROS requests no streams for itself, and a GCS that would (MAVProxy) is
+# deliberately not in this stack.
+#
+# These parameters are NOT sufficient on their own, and that was MEASURED:
+# with them set as below, a mission bag still carried fourteen
+# /mavros/local_position/odom messages in fourteen seconds and NO
+# /mavros/estimator_status at all. car_nav.launch.py therefore also sends
+# MAVLink2 SET_MESSAGE_INTERVAL requests once MAVROS is connected, which do
+# take effect (the same topic measured 9.9 Hz immediately afterwards). These
+# stay because they are the autopilot-side baseline and cost nothing; the
+# launch file is what the evidence pipeline actually depends on.
+SR0_POSITION     10     # LOCAL_POSITION_NED, GLOBAL_POSITION_INT: the estimate
+SR0_EXT_STAT     5      # SYS_STATUS, NAV_CONTROLLER_OUTPUT (wp_dist), GPS_RAW
+SR0_EXTRA1       10     # ATTITUDE
+SR0_EXTRA2       5      # VFR_HUD
+# SR0_EXTRA3 nominally carries AHRS, SYSTEM_TIME and ESTIMATOR_STATUS, but
+# MEASURED: ESTIMATOR_STATUS never arrives on this build. The launch file's
+# MAVLink2 SET_MESSAGE_INTERVAL request for it is answered success=False in
+# every car launch.log, /mavros/estimator_status is recorded with zero
+# messages, and every uncertainty metric is null naming that. The parameter
+# stays because it is the autopilot-side baseline and costs nothing.
+SR0_EXTRA3       2
+SR0_RAW_SENS     2      # RAW_IMU and friends, recorded as evidence only
+SR0_PARAMS       10     # parameter replies, so MAVROS's param fetch completes
+
+# --- Simulation timing --------------------------------------------------------
+# SIM_SPEEDUP 1 keeps sim time tracking wall time; see docs/gate.md.
+# SIM_RATE_HZ 500 is one FDM frame per 0.002 s gz step, which is what lockstep
+# needs to exchange one state/servo pair per physics step. It is re-measured
+# under lockstep (RTF and SITL lost/duplicate frame warnings) and the value
+# finally pinned is recorded in docs/gate.md.
+SIM_SPEEDUP      1
+SIM_RATE_HZ      500
+
+# --- State estimation ---------------------------------------------------------
+# EKF3 with simulated GPS is the robot's own localization: /mavros/local_position
+# comes from this estimator, never from simulator truth.
+EK3_ENABLE       1
+AHRS_EKF_TYPE    3
+GPS_TYPE         1
+
+# --- Arming -------------------------------------------------------------------
+# ARMING_CHECK 0: SITL has no RC transmitter and no battery monitor, so those
+# pre-arm checks can only fail for reasons that are artefacts of simulation;
+# every pre-arm condition that matters here (EKF origin, GPS fix, attitude) is
+# itself simulated. The value used is recorded in the run evidence rather than
+# left implicit, because disabling arming checks is a real reduction in safety
+# behaviour and must not be invisible.
+ARMING_CHECK     0
+
+# --- Speed and waypoint acceptance --------------------------------------------
+# CRUISE_SPEED/WP_SPEED 1.0 m/s are this plant's commanded speed and are copied
+# into the robot profile's plant.max_linear_m_s.
+# WP_RADIUS 1.0 m is the rover's OWN arrival radius. MAVLink
+# NAV_CONTROLLER_OUTPUT.wp_dist is a uint16 in METRES and TRUNCATES, so
+# `wp_dist <= 1` means a true distance anywhere under 2 m - the autopilot's
+# half of the arrival test cannot resolve better than that however this
+# parameter is set. The runner therefore ALSO requires the robot's own
+# estimate to be within the profile's arrival_estimate_tolerance_m of the
+# setpoint it published, so the 1 m quantum no longer bounds where the
+# vehicle may come to rest: see ral_bringup/config/robots/car.yaml.
+CRUISE_SPEED     1.0
+WP_SPEED         1.0
+WP_RADIUS        1.0
+
+# --- Steering geometry and rate -----------------------------------------------
+# TURN_RADIUS is geometric, not tuned: wheelbase 0.35 / tan(0.52) = 0.611 m,
+# from the model's axle spacing and its +/-0.52 rad knuckle joint limits.
+# ATC_STR_RAT_MAX caps the commanded steering rate in deg/s.
+TURN_RADIUS      0.611
+ATC_STR_RAT_MAX  90
+
+# --- Failsafes ----------------------------------------------------------------
+# FS_GCS_ENABLE 0: nothing in this stack sends a GCS heartbeat (MAVROS attaches
+# as a client and the scenario runner is not a GCS), so a GCS failsafe would end
+# every mission for a reason that is not the experiment being run.
+FS_GCS_ENABLE    0

@@ -14,7 +14,8 @@
 # embed it (/world/ral_apartment/...). A second world gets its own
 # bridge_roomba_<world>.yaml rather than a template or a generator: a static,
 # greppable artifact is what makes "is truth reaching /tf?" answerable by
-# reading one file. roomba_sim.launch.py's `world` argument selects between them.
+# reading one file. robot_sim.launch.py's `world` and `robot` arguments select
+# between them.
 #
 # Message type prefix is gz.msgs.* , never ignition.msgs.* (resolved in Phase 0,
 # docs/gate.md).

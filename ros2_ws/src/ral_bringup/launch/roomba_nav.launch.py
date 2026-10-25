@@ -17,8 +17,9 @@ Bring up the full navigation stack: sim, fault injection, AMCL and Nav2.
 
 What runs
 ---------
-  * roomba_sim.launch.py - gz, the ROS/gz bridge, robot_state_publisher and
-    ral_eval's ground_truth_node (evaluation only, no TF).
+  * robot_sim.launch.py - gz, the ROS/gz bridge, robot_state_publisher, the
+    runtime spawn of the body itself and ral_eval's ground_truth_node
+    (evaluation only, no TF).
   * faults.launch.py - ral_faults/scan_fault_relay (the sole publisher of
     /scan, and where lidar degradation is injected), ral_faults/fault_manager
     (every /faults/* service, the FaultEvent lifecycle and /faults/active) and
@@ -52,6 +53,7 @@ asserts both at runtime (checks 4 and 5).
 """
 
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -63,49 +65,14 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
-from ral_eval.frames import load_alignment_for_map, map_to_world_tf
-
-
-def _map_to_world_static_tf(context, *args, **kwargs):
-    """
-    Build the display-only map -> world transform from the measured alignment.
-
-    An OpaqueFunction because the `map` argument has to be resolved to a real
-    string before the alignment file beside it can be read. It is added
-    OUTSIDE the TimerAction that delays Nav2, so a bad alignment stops the
-    launch before gz is spawned rather than ten seconds into a run.
-
-    This transform is DISPLAY ONLY. It carries a fixed, measured frame
-    alignment and no robot pose, so it does not leak simulator truth into the
-    navigation path (ENGINEERING.md section 4): nothing downstream can derive
-    where the robot is from it. It exists so RViz, whose fixed frame is `map`,
-    can draw /ground_truth/odom - which is stamped in the gz `world` frame -
-    on top of the map.
-
-    Phase 3's metrics must read maps/apartment_frames.yaml directly and apply
-    ral_eval.frames, never listen to this TF: a metric that depends on a
-    transform published by the stack it is measuring stops being independent
-    of it.
-
-    load_alignment_for_map raises if the file is missing, malformed, unsealed
-    or measured against a different grid, naming the file and the command
-    that fixes it. That is deliberate - an identity fallback, or an alignment
-    belonging to some other .pgm, publishes a frame offset that every later
-    number reports as localization error.
-    """
-    map_path = LaunchConfiguration('map').perform(context)
-    x, y, yaw = map_to_world_tf(load_alignment_for_map(map_path))
-    return [Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='map_to_world_static_tf',
-        arguments=['--x', f'{x:.6f}', '--y', f'{y:.6f}', '--z', '0',
-                   '--yaw', f'{yaw:.6f}', '--pitch', '0', '--roll', '0',
-                   '--frame-id', 'map', '--child-frame-id', 'world'],
-        parameters=[{'use_sim_time': True}],
-        output='screen')]
+# The launch system executes launch files by PATH, not as a package, so a
+# sibling module is importable only once its directory is on sys.path. The
+# map/alignment refusal lives in common.py because car_nav.launch.py needs
+# exactly the same guarantee, and two copies would eventually disagree about
+# which map is acceptable.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import map_to_world_static_tf          # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -123,13 +90,26 @@ def generate_launch_description() -> LaunchDescription:
                         'truth frame name together.'),
         DeclareLaunchArgument(
             'robot', default_value='roomba',
-            description='Robot key in ral_faults/config/capabilities.yaml: decides '
-                        'which faults the manager will apply and which gz model they '
-                        'address.'),
+            description='Robot key: selects ral_bringup/config/robots/<robot>.yaml, '
+                        'and with it the gz model spawned, which faults the manager '
+                        'will apply and which gz model they address.'),
         DeclareLaunchArgument(
             'seed', default_value='1',
             description="The scenario's seed, forwarded to scan_fault_relay's RNG. "
                         'It governs the lidar noise and dropout only.'),
+        DeclareLaunchArgument(
+            'spawn_x', default_value='',
+            description="World-frame spawn x, forwarded to robot_sim.launch.py. "
+                        "Empty means the profile's spawn.x. The scenario runner "
+                        'passes its declared initial pose, so the declared and the '
+                        'actual pose cannot disagree.'),
+        DeclareLaunchArgument(
+            'spawn_y', default_value='',
+            description="World-frame spawn y. Empty means the profile's spawn.y."),
+        DeclareLaunchArgument(
+            'spawn_yaw', default_value='',
+            description="World-frame spawn yaw in rad. Empty means the profile's "
+                        'spawn.yaw.'),
         DeclareLaunchArgument(
             'map', default_value=os.path.join(bringup_share, 'maps', 'apartment.yaml'),
             description='Static map. Its <map>_frames.yaml alignment must have been '
@@ -151,12 +131,18 @@ def generate_launch_description() -> LaunchDescription:
         # First, so that an alignment that is missing, unsealed or measured
         # against a different grid aborts the launch before anything is
         # spawned, rather than after gz and the whole Nav2 stack are up.
-        OpaqueFunction(function=_map_to_world_static_tf),
+        OpaqueFunction(function=map_to_world_static_tf),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                os.path.join(bringup_share, 'launch', 'roomba_sim.launch.py')),
-            launch_arguments={'world': world}.items()),
+                os.path.join(bringup_share, 'launch', 'robot_sim.launch.py')),
+            launch_arguments={
+                'world': world,
+                'robot': robot,
+                'spawn_x': LaunchConfiguration('spawn_x'),
+                'spawn_y': LaunchConfiguration('spawn_y'),
+                'spawn_yaw': LaunchConfiguration('spawn_yaw'),
+            }.items()),
 
         # Fault injection: the scan relay (sole publisher of /scan), the fault
         # manager and the gz interfaces the faults are applied through. The

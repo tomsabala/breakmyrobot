@@ -1,0 +1,126 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# One robot's profile: everything about `roomba` that code must not hardcode.
+#
+# This file is the single source for the gz model name, the spawn pose, the
+# autonomy stack that drives it, what its position estimate IS, the plant
+# limits, the footprint, which faults are real for it and which topics a run
+# records. ral_eval/ral_eval/robot_profile.py is the only loader; the launch
+# file passes the path, because ral_bringup exec_depends both ral_eval and
+# ral_faults while ral_eval depends on neither, so that is the only package
+# the loader can live in without closing a cycle.
+#
+# A robot with no profile is an ERROR, never an implicit allow: the fault
+# manager refuses rather than guessing that an unknown platform supports
+# everything, and the runner aborts before a run directory is created.
+#
+# `model` is the gz entity name the wrench and the teleport address, and the
+# name robot_sim.launch.py spawns the body under. `estimate` and `command` are
+# what metrics.py and plot_run.py LABEL their numbers with: every truth-vs-
+# estimate figure in metrics.json names the estimator it was measured against,
+# and that name comes from here rather than from a module constant.
+
+robot: roomba
+model: ral_roomba
+description_model: ral_roomba
+stack_launch: roomba_nav.launch.py
+bridge_config: bridge_roomba_{world}.yaml
+
+# World frame. x/y/yaw are DEFAULTS: the scenario's initial_pose overrides
+# them, so the pose the scenario declares and the pose the body is spawned at
+# cannot disagree. z is NOT overridable - it is a property of the body.
+spawn:
+  x: 0.5
+  y: 0.5
+  z: 0.05
+  yaw: 0.0
+  z_source: "ral_roomba/model.sdf: the wheel centres sit 0.014 below the base centre with radius 0.036, and the caster centres 0.035 below it with radius 0.015, so 0.014 + 0.036 = 0.035 + 0.015 = 0.05 and both touch the floor with the base centre at z 0.05"
+
+# What this robot believes about where it is. Nothing here is simulator truth.
+estimate:
+  topic: /amcl_pose
+  type: geometry_msgs/msg/PoseWithCovarianceStamped
+  frame: map
+  label: "AMCL (nav2_amcl) over /scan"
+  # DiffDrive publishes odom->base_link over the bridge; the estimate chain is
+  # map -> odom -> base_link and AMCL owns the first link.
+  tf_source: diff_drive_bridge
+  uncertainty:
+    kind: covariance_trace
+    converged_below: 0.25
+
+command:
+  kind: velocity_twist
+  topic: /cmd_vel
+  label: "/cmd_vel (velocity_smoother output)"
+
+mission_driver: nav2
+
+plant:
+  max_linear_m_s: 0.46
+  max_angular_rad_s: 1.9
+  # A differential-drive robot turns in place: there is no minimum radius.
+  min_turn_radius_m: 0.0
+  source: "ral_roomba/model.sdf DiffDrive max_linear_velocity/max_angular_velocity"
+
+footprint:
+  radius_m: 0.18
+  source: "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+
+goal_tolerance_m: 0.12
+kidnap_z_m: 0.05
+
+# The gate: one message on each of these before a run may start. A stack that
+# never comes up is a failed run with artifacts, not a traceback. The limit is
+# WALL seconds: it guards process start-up and discovery, which happen before
+# the simulation exists, so a sim-time deadline would never fire.
+bringup_wall_limit_s: 90.0
+
+bringup_topics:
+  - {topic: /clock, type: rosgraph_msgs/msg/Clock}
+  - {topic: /odom, type: nav_msgs/msg/Odometry}
+  - {topic: /ground_truth/odom, type: nav_msgs/msg/Odometry}
+  - {topic: /scan, type: sensor_msgs/msg/LaserScan}
+  - {topic: /map, type: nav_msgs/msg/OccupancyGrid}
+
+# Appended to run_scenario.RECORD_TOPICS_COMMON. These are the ones that exist
+# only because this platform runs AMCL and Nav2.
+record_topics:
+  - /initialpose                        # localization_converged_sim_s starts here
+  - /amcl_pose                          # est_error_*, est_cov_trace_max
+  - /odom                               # wheel odometry, for inspection
+  - /cmd_vel                            # stopped_time_s, cmd_vs_achieved
+  - /plan                               # plan_publications, fault_to_response_s
+  - /navigate_to_pose/_action/status    # mission_result, verbatim
+  - /navigate_to_pose/_action/feedback  # recoveries, distance_remaining
+  - /map                                # plot panel A's grid; latched
+
+# Topics whose PRE-MISSION history is evidence: nothing may be published on
+# them until the recorder has actually subscribed.
+recorder_gate_topics:
+  - /initialpose
+  - /cmd_vel
+  - /amcl_pose
+
+faults: [spawn_obstacle, clear_obstacle, scan_degradation, mobility_fault, kidnap]
+
+estimator_label: AMCL
+
+# Appended to the shared mobility_fault honesty note, because the numbers are
+# a property of THIS plant. Measured at a commanded 0.400 m/s.
+mobility_note: >-
+  MEASURED on this plant at a commanded 0.400 m/s: -15 N and -30 N produce no
+  deficit at all, -60 N produces 25% and pushes the body backwards, -120 N
+  produces 90%.

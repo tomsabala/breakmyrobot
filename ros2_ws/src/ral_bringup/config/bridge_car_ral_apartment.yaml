@@ -1,0 +1,101 @@
+# ROS <-> Gazebo bridge contract: ral_car in the ral_apartment world.
+#
+# This file is the whole topic interface between the simulated car and ROS, and
+# like its ral_roomba sibling it is where the project's localization-honesty
+# property is enforced. Read the two absences below before changing anything.
+#
+# NO /cmd_vel ROW. This platform has no DiffDrive and takes no gz Twist at all:
+# ArduRover is commanded over MAVLink, and the actuation path is
+# ArduPilotPlugin's FDM socket driving the steering and throttle joints named in
+# ral_description/models/ral_car/model.sdf. Adding a Twist row here would create
+# a second, unmodelled way to move the car past the autopilot.
+#
+# NO /tf ROW. There is no DiffDrive and therefore no wheel-odometry integrator,
+# so the frame `odom` does not exist for this robot and `odom`->`base_link` has
+# no publisher. The car's estimate chain is `map -> ekf_local -> base_link`,
+# published by the ekf_local_tf node from /mavros/local_position/odom - the
+# robot's own EKF3 estimate, arriving over MAVLink. A /tf row here would have to
+# be fed from simulator truth, which is exactly what is forbidden.
+#
+# The single /ground_truth/* row below is evaluation-only and is never bridged
+# into /tf. test/test_bridge_contract.py parses every bridge_<robot>_<world>.yaml
+# in this package and fails the build if truth reaches /tf, if a robot whose
+# profile says `ekf_local_tf` carries any /tf row, or if anything but a truth
+# pose feed claims /ground_truth/*.
+#
+# The filename carries the world name because two of the gz topic paths below
+# embed it (/world/ral_apartment/...). A second world gets its own
+# bridge_car_<world>.yaml rather than a template or a generator: a static,
+# greppable artifact is what makes "is truth reaching /tf?" answerable by
+# reading one file. robot_sim.launch.py's `world` and `robot` arguments select
+# between them.
+#
+# Message type prefix is gz.msgs.* , never ignition.msgs.* (resolved in Phase 0,
+# docs/gate.md).
+
+# --- Sensors ------------------------------------------------------------------
+# Raw, as the sensor produces it. NOTHING on this platform consumes the scan:
+# ArduRover navigates on EKF3 position alone and no costmap runs for this robot.
+# It is bridged so the sensor gate, the scan-liveness check and the recorded
+# evidence cover both robots identically - and it is why `scan_degradation` is
+# refused for this robot rather than offered as a fault with no effect.
+- ros_topic_name: "/scan_raw"
+  gz_topic_name: "/scan_raw"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+# The IMU is also the autopilot's attitude source, but ArduPilot reads it
+# directly through ArduPilotPlugin inside gz, not through this bridge. This row
+# exists so the same stream is recorded as evidence.
+#
+# The gz name is the SCOPED one, and the model deliberately sets no <topic> on
+# the sensor: ArduPilotPlugin computes this exact name itself and subscribes to
+# it, so a <topic> override would leave the autopilot with no IMU and stall the
+# lock-stepped FDM handshake. See the sensor block in ral_car/model.sdf.
+- ros_topic_name: "/imu"
+  gz_topic_name: "/world/ral_apartment/model/ral_car/link/base_link/sensor/imu_sensor/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/joint_states"
+  gz_topic_name: "/world/ral_apartment/model/ral_car/joint_state"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS
+
+# A contact sensor ignores its SDF <topic> and always publishes on this generated
+# path (verified). The world must load gz-sim-contact-system or this topic never
+# appears, and collision_count then has no source for this robot.
+- ros_topic_name: "/bumper"
+  gz_topic_name: "/world/ral_apartment/model/ral_car/link/base_link/sensor/bumper/contact"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
+  direction: GZ_TO_ROS
+
+# --- Simulator truth: evaluation only -----------------------------------------
+# PosePublisher's model pose is ground truth. It is bridged to /ground_truth/tf
+# and NEVER to /tf: putting truth in the TF tree would let the evaluation read a
+# perfect pose as if it were the robot's estimate, which ENGINEERING.md section 4
+# forbids and which would make every localization metric meaningless.
+# ral_eval's ground_truth_node converts this to /ground_truth/odom and
+# broadcasts no TF. ekf_local_tf reads that odom once, to MEASURE the EKF origin
+# offset, and broadcasts only the robot's own estimate afterwards.
+# The same prohibition covers /world/ral_apartment/pose/info and
+# /world/ral_apartment/dynamic_pose/info - do not bridge either into /tf.
+- ros_topic_name: "/ground_truth/tf"
+  gz_topic_name: "/model/ral_car/pose"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
+
+# --- Time ---------------------------------------------------------------------
+# Every node in this project runs use_sim_time:=true; this is where sim time
+# enters ROS. ArduPilotPlugin's <lock_step>1</lock_step> keeps the autopilot's
+# own clock stepping with gz, so this clock is also the autopilot's.
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
