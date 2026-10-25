@@ -123,6 +123,44 @@ as unverified. Confirmed: **`gz.msgs.*`**. The bridge accepted
 (sensor_msgs/msg/LaserScan)]`. All Phase 1 bridge configs must use the
 `gz.msgs.*` prefix.
 
+## Lockstep with ArduPilot SITL (Phase 5, the car)
+
+`ral_car` carries `ArduPilotPlugin` with `<lock_step>1</lock_step>`, so gz
+advances only when the autopilot has answered: the simulator's clock and the
+autopilot's are the same clock, and every sim-time number in a car run is
+measured against a clock ArduRover actually used. The cost is that a stalled
+FDM handshake stops the simulation outright rather than letting it drift —
+which is exactly how the two bring-up defects in `docs/car-closed-loop.md`
+presented: `/clock` went silent.
+
+Pinned: `SIM_RATE_HZ 500` in `ral_bringup/config/rover_ackermann.parm`, one
+FDM frame per 0.002 s physics step (`ral_apartment.sdf` sets
+`max_step_size` 0.002).
+
+MEASURED over the three `baseline_car` runs behind
+`docs/repeatability-baseline_car.md`, reading
+`/world/ral_apartment/stats`:
+
+| Run | `real_time_factor` samples |
+| --- | --- |
+| `baseline_car_20261025T132957Z` | 0.7929, 1.0014, 0.7937 |
+| `baseline_car_20261025T133115Z` | 1.0000, 0.9956, 0.9456 |
+| `baseline_car_20261025T133232Z` | 1.0095, 0.9992, 0.9998 |
+
+Real time factor sits at 1.00 under lockstep when the host is otherwise idle
+and dips to 0.79 when it is not — these three runs are back to back, and the
+samples are taken after the mission while the recorder is still finalising.
+No reduction in `SIM_RATE_HZ` and no `SIM_SPEEDUP` compensation was needed:
+a factor below 1.0 makes a run take longer in WALL time and changes nothing
+it measures, because every duration in the evidence is sim time off `/clock`.
+
+SITL reported no lost or duplicate frames during any mission: `Duplicate
+input frame` appears zero times in all three `launch.log` files, and the one
+`No JSON sensor message received, resending servos` line in each is from
+before the handshake completed, while SITL was waiting for the plugin — in
+the first run it is at line 183, against the `EKF3 IMU0 origin set` that
+follows at line 325.
+
 ## Environment
 
 | Item | Value |
