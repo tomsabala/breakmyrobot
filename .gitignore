@@ -3,6 +3,15 @@
 # Run artifacts (bags, metrics, plots)
 /runs/
 
+# Stack launch logs the dashboard gateway captures, one per start
+/logs/
+
+# The dashboard's own build tooling. `dashboard/src` and its config ARE
+# tracked; node_modules and the bundle are derived from them.
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+
 # colcon
 ros2_ws/build/
 ros2_ws/install/

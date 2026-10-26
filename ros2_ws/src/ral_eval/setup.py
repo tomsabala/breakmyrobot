@@ -49,6 +49,7 @@ setup(
             'run_scenario = ral_eval.run_scenario:main',
             'compute_metrics = ral_eval.metrics:main',
             'plot_run = ral_eval.plot_run:main',
+            'dashboard_api = ral_eval.dashboard_api:main',
         ],
     },
 )

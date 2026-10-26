@@ -53,6 +53,15 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>rosgraph_msgs</exec_depend>
 
+  <!-- Phase 6, the dashboard gateway (dashboard_api.py). std_srvs carries
+       Trigger, the type of /faults/clear_all; ros_gz_interfaces carries
+       Contacts, the type the /bumper bridge publishes, which the console's
+       contact row decodes. Both are imported only by the gateway: a missing
+       ros_gz_interfaces degrades that one row to a stated "unavailable"
+       rather than failing the process. -->
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>ros_gz_interfaces</exec_depend>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
