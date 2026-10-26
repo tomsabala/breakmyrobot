@@ -37,7 +37,7 @@ import time
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import NavigateToPose
-from ral_eval.frames import wrap_to_pi
+from ral_eval.frames import wrap_to_pi, yaw_of_quaternion
 from ral_eval.mission_driver import MissionDriver
 from ral_interfaces.msg import MissionState
 import rclpy
@@ -72,11 +72,6 @@ TERMINAL_STATES = {
                                  'nav2:STATUS_CANCELED'),
     GoalStatus.STATUS_ABORTED: (MissionState.STATE_ABORTED, 'nav2:STATUS_ABORTED'),
 }
-
-
-def yaw_of_quaternion(q) -> float:
-    return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                      1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
 
 class Nav2Driver(MissionDriver):
@@ -282,6 +277,12 @@ class Nav2Driver(MissionDriver):
 
     def stop(self) -> None:
         self.node.stop()
+
+    def teardown(self) -> None:
+        """Destroy the action client, which holds its own node reference."""
+        self.client.destroy()
+        self.handle = None
+        self.result_future = None
 
 
 def _twist(linear_x: float = 0.0, angular_z: float = 0.0) -> Twist:

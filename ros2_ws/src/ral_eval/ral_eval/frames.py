@@ -50,6 +50,17 @@ def wrap_to_pi(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
+def quaternion_of_yaw(yaw: float):
+    """Return the unit quaternion (x, y, z, w) for a rotation of `yaw` about +Z."""
+    return (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
+
+
+def yaw_of_quaternion(q) -> float:
+    """Return the yaw about +Z of a geometry_msgs/Quaternion."""
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                      1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+
 def load_world_to_map(path: str) -> 'tuple[float, float, float]':
     """
     Read a measured (x, y, yaw) alignment from a <map>_frames.yaml file.

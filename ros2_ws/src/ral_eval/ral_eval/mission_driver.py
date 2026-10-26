@@ -183,6 +183,22 @@ class MissionDriver:
     def stop(self) -> None:
         """Leave the plant in a safe state; always called in `finally`."""
 
+    def teardown(self) -> None:
+        """
+        Release the ROS entities this driver created on the node.
+
+        `Node.destroy_node()` finalises the publishers, subscriptions,
+        services, clients and timers IT created, but an rclpy ActionClient is
+        not one of them: it holds its own reference to the node handle, so a
+        node whose driver had one stays in the ROS graph after destroy_node()
+        returns, under its own name, with no entities. A process that exits
+        immediately afterwards never notices; the dashboard gateway outlives
+        every stack it starts and would accumulate one ghost node per run.
+
+        Called after stop() and before destroy_node(). Default: nothing to
+        release.
+        """
+
 
 def build_driver(node, profile: dict, record: dict) -> MissionDriver:
     """
