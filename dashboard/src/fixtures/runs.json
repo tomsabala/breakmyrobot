@@ -1,0 +1,917 @@
+[
+ {
+  "id": "baseline_roomba_20261026T093631Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   29.414,
+   66.95400000000001
+  ],
+  "wall": [
+   "2026-10-26T09:36:31Z",
+   "2026-10-26T09:37:57Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "1d74ea18a59bb68921980bbb3d15d35fac114842+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "93248fc6d8372e4b68baf4d8f08076b9f36b26e86cfdadfb963881393901fae1",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_roomba_20261025T133934Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   30.214000000000002,
+   67.952
+  ],
+  "wall": [
+   "2026-10-25T13:39:34Z",
+   "2026-10-25T13:41:00Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "27fd32feb11a2f788a95d99be452883e4165cd7f45875f850389f0cecba61696",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_roomba_20261025T133742Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   32.216,
+   69.696
+  ],
+  "wall": [
+   "2026-10-25T13:37:42Z",
+   "2026-10-25T13:39:16Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "27fd32feb11a2f788a95d99be452883e4165cd7f45875f850389f0cecba61696",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_roomba_20261025T133610Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   32.212,
+   70.27000000000001
+  ],
+  "wall": [
+   "2026-10-25T13:36:10Z",
+   "2026-10-25T13:37:38Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "27fd32feb11a2f788a95d99be452883e4165cd7f45875f850389f0cecba61696",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_car_20261025T133232Z",
+  "scenario": "baseline_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "mavros:reached_wp_radius",
+  "detail": "/mavros/nav_controller_output/output reported wp_dist 1 m within WP_RADIUS 1 m on 3 consecutive messages while the mode was GUIDED and the vehicle armed, having first reported a distance beyond that tolerance, AND the robot's own estimate was 0.78 m from the commanded setpoint, within the profile's arrival_estimate_tolerance_m 1.50. wp_dist is the FCU's own distance to its target and is uint16 METRES, so the estimate gap is what bounds where this vehicle came to rest.",
+  "sim": [
+   53.53,
+   60.56
+  ],
+  "wall": [
+   "2026-10-25T13:32:32Z",
+   "2026-10-25T13:33:52Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "6bb4ffa7dbb27b13fb8d87e2e2bde43f97f2b4976b33513dcc93b607217d7928",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "07fdb2578d400ff99fd4c365dad3aa595025fa1eef920ba6f1286ee220812740",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": "196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6",
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9989694591015802,
+    "y": 3.998944759045562,
+    "yaw": 0.045385285219874165,
+    "residual_m": 0.0014749739032401772,
+    "residual_yaw_rad": 0.045385285219874165,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_car_20261025T133115Z",
+  "scenario": "baseline_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "mavros:reached_wp_radius",
+  "detail": "/mavros/nav_controller_output/output reported wp_dist 1 m within WP_RADIUS 1 m on 3 consecutive messages while the mode was GUIDED and the vehicle armed, having first reported a distance beyond that tolerance, AND the robot's own estimate was 0.69 m from the commanded setpoint, within the profile's arrival_estimate_tolerance_m 1.50. wp_dist is the FCU's own distance to its target and is uint16 METRES, so the estimate gap is what bounds where this vehicle came to rest.",
+  "sim": [
+   48.048,
+   58.404
+  ],
+  "wall": [
+   "2026-10-25T13:31:15Z",
+   "2026-10-25T13:32:29Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "6bb4ffa7dbb27b13fb8d87e2e2bde43f97f2b4976b33513dcc93b607217d7928",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "07fdb2578d400ff99fd4c365dad3aa595025fa1eef920ba6f1286ee220812740",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": "196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6",
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9994752047536244,
+    "y": 3.9994534094753464,
+    "yaw": 0.04519431193801354,
+    "residual_m": 0.0007577408872823783,
+    "residual_yaw_rad": 0.04519431193801354,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_car_20261025T132957Z",
+  "scenario": "baseline_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "mavros:reached_wp_radius",
+  "detail": "/mavros/nav_controller_output/output reported wp_dist 1 m within WP_RADIUS 1 m on 3 consecutive messages while the mode was GUIDED and the vehicle armed, having first reported a distance beyond that tolerance, AND the robot's own estimate was 1.50 m from the commanded setpoint, within the profile's arrival_estimate_tolerance_m 1.50. wp_dist is the FCU's own distance to its target and is uint16 METRES, so the estimate gap is what bounds where this vehicle came to rest.",
+  "sim": [
+   52.068000000000005,
+   57.758
+  ],
+  "wall": [
+   "2026-10-25T13:29:57Z",
+   "2026-10-25T13:31:12Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "6bb4ffa7dbb27b13fb8d87e2e2bde43f97f2b4976b33513dcc93b607217d7928",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "07fdb2578d400ff99fd4c365dad3aa595025fa1eef920ba6f1286ee220812740",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": "196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6",
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9995084726047299,
+    "y": 3.999563444857169,
+    "yaw": 0.04436735709640008,
+    "residual_m": 0.0006574036606478351,
+    "residual_yaw_rad": 0.04436735709640008,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "narrow_doorway_roomba_20261025T132534Z",
+  "scenario": "narrow_doorway_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.1161554679274559, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   30.512,
+   60.396
+  ],
+  "wall": [
+   "2026-10-25T13:25:34Z",
+   "2026-10-25T13:26:51Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "9aa8536d210cbb136c059362d123a8c508e7ec98237b8bf5798dde0af8bce0ce",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "3090b96993428c6d27d921cd6793b1a323673cb3a7cdb5b332dabd06556f0edb",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.45",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "mobility_fault_car_20261025T132402Z",
+  "scenario": "mobility_fault_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "aborted",
+  "outcome": "mavros:stalled_no_progress",
+  "detail": "the robot's own estimate moved 0.066 m in 15.0 s sim, less than the 0.25 m this driver requires over 15 s. This is a DETERMINISTIC POLICY in the runner, not a decision the autopilot made: ArduRover carries no obstacle avoidance and would keep pushing until the scenario timeout. HOLD was commanded. Last wp_dist 7.0",
+  "sim": [
+   55.188,
+   73.78
+  ],
+  "wall": [
+   "2026-10-25T13:24:02Z",
+   "2026-10-25T13:25:27Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "9aa8536d210cbb136c059362d123a8c508e7ec98237b8bf5798dde0af8bce0ce",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "3acf805057900d3e6df2023c1bdc5f23bd08c51b3f124f8e8400c9a594392e9c",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": "196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6",
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9989716214409757,
+    "y": 3.998946003775261,
+    "yaw": 0.04521457751723712,
+    "residual_m": 0.0014725727494506592,
+    "residual_yaw_rad": 0.04521457751723711,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "kidnap_car_20261025T132227Z",
+  "scenario": "kidnap_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "aborted",
+  "outcome": "mavros:stalled_no_progress",
+  "detail": "the robot's own estimate moved 0.215 m in 15.0 s sim, less than the 0.25 m this driver requires over 15 s. This is a DETERMINISTIC POLICY in the runner, not a decision the autopilot made: ArduRover carries no obstacle avoidance and would keep pushing until the scenario timeout. HOLD was commanded. Last wp_dist 4.0",
+  "sim": [
+   52.35,
+   76.26400000000001
+  ],
+  "wall": [
+   "2026-10-25T13:22:27Z",
+   "2026-10-25T13:23:55Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "9aa8536d210cbb136c059362d123a8c508e7ec98237b8bf5798dde0af8bce0ce",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "b87c4ecbd983c7a3974588ef499ee6ef8e165783c0a3dbf895a8823707d0df6e",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": "196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6",
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9989707965024146,
+    "y": 3.9989470704257233,
+    "yaw": 0.04522351821395376,
+    "residual_m": 0.0014723859982452162,
+    "residual_yaw_rad": 0.04522351821395376,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "narrow_doorway_car_20261025T132108Z",
+  "scenario": "narrow_doorway_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "mavros:reached_wp_radius",
+  "detail": "/mavros/nav_controller_output/output reported wp_dist 1 m within WP_RADIUS 1 m on 3 consecutive messages while the mode was GUIDED and the vehicle armed, having first reported a distance beyond that tolerance, AND the robot's own estimate was 1.42 m from the commanded setpoint, within the profile's arrival_estimate_tolerance_m 1.50. wp_dist is the FCU's own distance to its target and is uint16 METRES, so the estimate gap is what bounds where this vehicle came to rest.",
+  "sim": [
+   55.112,
+   66.2
+  ],
+  "wall": [
+   "2026-10-25T13:21:08Z",
+   "2026-10-25T13:22:25Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "9aa8536d210cbb136c059362d123a8c508e7ec98237b8bf5798dde0af8bce0ce",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "4ca7161c8bd4cd772a476763fd5a8abb06085b7f836fd8ea0f409ff6a4930fd2",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": "196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6",
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.45",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9989706536391956,
+    "y": 4.448942580481771,
+    "yaw": 0.0452181537959238,
+    "residual_m": 0.0014756998231461966,
+    "residual_yaw_rad": 0.0452181537959238,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "mobility_fault_car_20261025T131455Z",
+  "scenario": "mobility_fault_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "mavros:reached_wp_radius",
+  "detail": "/mavros/nav_controller_output/output reported wp_dist 1 m within WP_RADIUS 1 m on 3 consecutive messages while the mode was GUIDED and the vehicle armed, having first reported a distance beyond that tolerance, AND the robot's own estimate was 1.42 m from the commanded setpoint, within the profile's arrival_estimate_tolerance_m 1.50. wp_dist is the FCU's own distance to its target and is uint16 METRES, so the estimate gap is what bounds where this vehicle came to rest.",
+  "sim": [
+   52.408,
+   59.214000000000006
+  ],
+  "wall": [
+   "2026-10-25T13:14:55Z",
+   "2026-10-25T13:16:04Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "9aa8536d210cbb136c059362d123a8c508e7ec98237b8bf5798dde0af8bce0ce",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "bd7a19089823d1e10a6bff361eb1e5e6d69033d9f23c85c17a28c216e3ce5507",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": "196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6",
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9989727090374431,
+    "y": 3.998946521245099,
+    "yaw": 0.045221491656031024,
+    "residual_m": 0.001471442900277992,
+    "residual_yaw_rad": 0.045221491656031024,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "narrow_doorway_car_20261025T120505Z",
+  "scenario": "narrow_doorway_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "aborted",
+  "outcome": "mavros:stalled_no_progress",
+  "detail": "the robot's own estimate moved 0.030 m in 15.0 s sim, less than the 0.25 m this driver requires over 15 s. This is a DETERMINISTIC POLICY in the runner, not a decision the autopilot made: ArduRover carries no obstacle avoidance and would keep pushing until the scenario timeout. HOLD was commanded. Last wp_dist 3.0",
+  "sim": [
+   53.448,
+   79.152
+  ],
+  "wall": [
+   "2026-10-25T12:05:05Z",
+   "2026-10-25T12:06:32Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "2de7ca9ea3fa6bf99528881302911b4e055b75e882d7f99d74297bcd1c18da53",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "a8b96480ee14a0faf77f982ecc8c0d4b96d4330b656797e90c8e9ec022c8ba4c",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": null,
+   "firmware_sha": null,
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9989710509130364,
+    "y": 4.4989390671213805,
+    "yaw": 0.04548148711654155,
+    "residual_m": 0.0014779427581943579,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "kidnap_car_20261025T115334Z",
+  "scenario": "kidnap_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "mavros:reached_wp_radius",
+  "detail": "/mavros/nav_controller_output/output reported wp_dist 2 m within WP_RADIUS 2 m on 3 consecutive messages while the mode was GUIDED and the vehicle armed, having first reported a distance beyond that tolerance. wp_dist is the FCU's own distance to its target and is uint16 METRES, so its resolution is 1 m",
+  "sim": [
+   51.470000000000006,
+   56.910000000000004
+  ],
+  "wall": [
+   "2026-10-25T11:53:34Z",
+   "2026-10-25T11:54:48Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "2de7ca9ea3fa6bf99528881302911b4e055b75e882d7f99d74297bcd1c18da53",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "f63d3af08194b98bde77b16c51730590c852e20c65b245857af6b0639a9630c8",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": null,
+   "firmware_sha": null,
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9989727044837468,
+    "y": 3.998946571976209,
+    "yaw": 0.04514472087356086,
+    "residual_m": 0.0014714097590480591,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_car_20261025T113941Z",
+  "scenario": "baseline_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "rejected",
+  "outcome": "mavros:not_accepted:arming",
+  "detail": "/mavros/cmd/arming answered mavros_msgs.srv.CommandBool_Response(success=False, result=0)",
+  "sim": [
+   null,
+   null
+  ],
+  "wall": [
+   "2026-10-25T11:39:41Z",
+   "2026-10-25T11:40:57Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "2de7ca9ea3fa6bf99528881302911b4e055b75e882d7f99d74297bcd1c18da53",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "07fdb2578d400ff99fd4c365dad3aa595025fa1eef920ba6f1286ee220812740",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": null,
+   "firmware_sha": null,
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": {
+    "x": 0.9960569296648215,
+    "y": 3.9958791567105427,
+    "yaw": 0.044499798617090684,
+    "residual_m": 0.005703433447006257,
+    "source": "/ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose"
+   }
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true
+ },
+ {
+  "id": "baseline_car_20261025T113631Z",
+  "scenario": "baseline_car",
+  "robot": "car",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": null,
+  "exit": 5,
+  "state": "",
+  "outcome": "runner:exception",
+  "detail": "Traceback (most recent call last):\n  File \"/ws/ros2_ws/build/ral_eval/ral_eval/run_scenario.py\", line 1272, in run\n    preflight_initial = preflight_goal(grid, initial_map, robot_radius_m,\n  File \"/ws/ros2_ws/build/ral_eval/ral_eval/run_scenario.py\", line 781, in preflight_goal\n    info = grid.info\nAttributeError: 'tuple' object has no attribute 'info'\n",
+  "sim": [
+   null,
+   null
+  ],
+  "wall": [
+   "2026-10-25T11:36:31Z",
+   "2026-10-25T11:37:26Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "6ddfa70b9a07114ba926c2b924d2037a3dacfc9f73dc8927fcbd78597738a712",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "07fdb2578d400ff99fd4c365dad3aa595025fa1eef920ba6f1286ee220812740",
+   "nav2_params_sha256": null,
+   "autopilot_parm_sha256": null,
+   "firmware_sha": null,
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "car_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=car",
+    "seed:=1",
+    "spawn_x:=1.0",
+    "spawn_y:=4.0",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": false
+ }
+]

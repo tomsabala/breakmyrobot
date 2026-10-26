@@ -1,0 +1,1750 @@
+{
+ "baseline_roomba_20261026T093631Z": {
+  "id": "baseline_roomba_20261026T093631Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   29.414,
+   66.95400000000001
+  ],
+  "wall": [
+   "2026-10-26T09:36:31Z",
+   "2026-10-26T09:37:57Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "1d74ea18a59bb68921980bbb3d15d35fac114842+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "93248fc6d8372e4b68baf4d8f08076b9f36b26e86cfdadfb963881393901fae1",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true,
+  "metrics": {
+   "mission_duration_s": {
+    "value": 37.53999999999999,
+    "unit": "s (sim)",
+    "source": "/mission_state",
+    "definition": "terminal MissionState stamp minus the goal_accepted stamp",
+    "reason": null
+   },
+   "path_length_m": {
+    "value": 13.529476018481741,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "sum of |delta xy| between consecutive truth samples inside the mission window, excluding any step longer than 3.0x this plant maximum (0.46 m/s, from the run's robot profile) for its own dt plus 0.05 m",
+    "reason": null
+   },
+   "teleport_excluded_m": {
+    "value": 0.0,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "summed length of the 0 step(s) path_length_m excluded as non-travel (kidnap, respawn or a dropped interval); a measured zero means no such step occurred",
+    "reason": null
+   },
+   "goal_pose_error_m": {
+    "value": 0.016923388449598484,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the scenario goal converted the same way",
+    "definition": "|last truth sample at or before the terminal stamp, in map, minus the goal in map|",
+    "reason": null
+   },
+   "est_error_mean_m": {
+    "value": 0.05924460307599106,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; mean over 103 pairs",
+    "reason": null
+   },
+   "est_error_max_m": {
+    "value": 0.10983024074530999,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; max over 103 pairs",
+    "reason": null
+   },
+   "est_error_at_start_pose_m": {
+    "value": 0.07335602706476763,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean |estimate - truth| while the robot is at its start pose and rotating in place: from the first /amcl_pose whose covariance trace is below 0.25 to goal acceptance, excluding any pair whose truth position has already moved more than 0.05 m from the truth position at acceptance. The robot is NOT stationary in this window - AMCL publishes on filter update and its filter updates on motion, so a stopped robot publishes nothing at all; the in-place warm-up rotation leaves xy unchanged, which is what the 0.05 m guard asserts. The guard is applied to the TRUTH half of each pair; within the 50 ms pairing window the body can travel at most 0.023 m, so the bound actually enforced on the estimate half is 0.05 + 0.023 m. It is map error plus world->map alignment error AT THAT ONE POSE, measured, and it is the scale against which in-mission estimate error should be read. It is NOT a lower bound: both terms vary across the map, so in-mission error below this value is normal.; mean over 23 pairs in [16.40, 29.41] s sim",
+    "reason": null
+   },
+   "est_cov_trace_max": {
+    "value": 0.09097778310152813,
+    "unit": "",
+    "source": "/amcl_pose",
+    "definition": "max of covariance[0] + covariance[7] + covariance[35] in the window",
+    "reason": null
+   },
+   "est_pos_horiz_accuracy_max_m": {
+    "value": null,
+    "unit": "m",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "max pos_horiz_accuracy and max pos_horiz_ratio over none (the profile names no uncertainty topic) inside the mission window: the estimator's OWN assessment of its horizontal position accuracy, which is what a platform with no pose covariance can honestly report",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports est_cov_trace_max instead"
+   },
+   "est_status_flags": {
+    "value": null,
+    "unit": "fraction",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "fraction of none (the profile names no uncertainty topic) messages inside the mission window in which each ESTIMATOR_STATUS flag was true, plus the message count. The estimator's OWN assessment of which of its states it considers healthy",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports its filter health as est_cov_trace_max instead"
+   },
+   "localization_converged_sim_s": {
+    "value": 3.1839999999999993,
+    "unit": "s (sim)",
+    "source": "/initialpose, /amcl_pose",
+    "definition": "first /amcl_pose whose covariance trace is below 0.25, minus the first /initialpose stamp. AMCL updates its filter on MOTION, so the runner rotates the robot in place while waiting; this measures that wait",
+    "reason": null
+   },
+   "collision_count": {
+    "value": 0,
+    "unit": "count",
+    "source": "/bumper",
+    "definition": "/bumper messages with a non-empty contacts list inside the window, debounced at 0.5 s sim per colliding pair (gz reports a contact every physics step while two bodies touch); 0 message(s) recorded. A gz contact sensor publishes only on contact, so this zero is a measurement only because the path was shown to be alive in this run: ['ros_gz_bridge'] publishing /bumper, and gz topic /world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact listed by gz topic -l",
+    "reason": null
+   },
+   "plan_publications": {
+    "value": 37,
+    "unit": "count",
+    "source": "/plan",
+    "definition": "count of /plan messages inside the window. This is how often the behaviour tree's RateController (hz=1.0) published a path, NOT a count of replans: the BT republishes at 1 Hz with or without a fault",
+    "reason": null
+   },
+   "stopped_time_s": {
+    "value": 0.05799999999999983,
+    "unit": "s (sim)",
+    "source": "/cmd_vel",
+    "definition": "sim seconds inside the window with |linear.x| < 0.01 and |angular.z| < 0.01, zero-order hold on the bag log time (sim), the last command held to the terminal stamp",
+    "reason": null
+   },
+   "mission_result": {
+    "value": {
+     "state": "succeeded",
+     "outcome": "nav2:STATUS_SUCCEEDED",
+     "source": "/navigate_to_pose/_action/status"
+    },
+    "unit": "",
+    "source": "/navigate_to_pose/_action/status",
+    "definition": "the action status of THIS goal, by UUID, as the server reported it. NavigateToPose's result payload is std_msgs/Empty, so the GoalStatus code is the only verbatim outcome the action offers",
+    "reason": null
+   },
+   "recoveries": {
+    "value": 0,
+    "unit": "count",
+    "source": "/navigate_to_pose/_action/feedback",
+    "definition": "max number_of_recoveries across NavigateToPose feedback inside the window. Nav2's own count of behaviour-tree recovery executions, never inferred from /plan or /cmd_vel",
+    "reason": null
+   },
+   "cmd_vs_achieved": {
+    "value": {
+     "linear": {
+      "mean_abs_error": 0.0036642524795454214,
+      "max_abs_error": 0.06761602755774453
+     },
+     "angular": {
+      "mean_abs_error": 0.02453641466291527,
+      "max_abs_error": 0.25031807507458453
+     },
+     "samples": 375
+    },
+    "unit": "m/s and rad/s",
+    "source": "/cmd_vel (zero-order hold) and /ground_truth/odom (differentiated)",
+    "definition": "commanded and achieved velocity resampled onto a 10.0 Hz grid over the window and compared sample by sample. Achieved velocity is a central difference of truth POSE, smoothed over 3 samples: forward speed is the body-frame projection of the xy difference on the heading, angular rate is the wrapped yaw difference. The truth message does carry a twist, but it is a raw 50 Hz finite difference stamped on a different grid and is marked unknown (twist.covariance[0] = -1) whenever two poses share a stamp, so it is not used here. The command series is stamped by the recorder and the truth series by the publisher; the measured offset between the two bases in this stack is under 35 ms, against a 100 ms grid step",
+    "reason": null
+   },
+   "speed_vs_target": {
+    "value": null,
+    "unit": "m/s and fraction",
+    "source": "/ground_truth/odom (differentiated) against the robot profile's plant.max_linear_m_s",
+    "definition": "achieved forward speed on the same 10.0 Hz grid cmd_vs_achieved uses, against 0.46 m/s - the cruise speed this platform is configured with (CRUISE_SPEED/WP_SPEED, recorded in the profile as plant.max_linear_m_s). deficit_fraction is 1 - mean_achieved / target, clamped at 0, so a vehicle at its configured speed reads 0 and a halted one reads 1. after_activation repeats the measurement from the first mobility_fault that reached state=activated to the end of the window, which is the number a mobility fault is read from. ACHIEVED SPEED IS SIMULATOR TRUTH, used here as an evaluation signal: the robot neither measured nor reported it, and no claim is made that it knew it was slow",
+    "reason": "this platform IS commanded in velocity on /cmd_vel; its speed is scored against that command by cmd_vs_achieved rather than against a configured cruise speed"
+   },
+   "fault_to_response_s": {
+    "value": null,
+    "unit": "list of s (sim)",
+    "source": "/fault_events, /plan, /cmd_vel, /navigate_to_pose/_action/feedback",
+    "definition": "per FaultEvent that reached state=activated: the first MATERIAL change after it. plan_diverged = a /plan leaving the last pre-activation plan by more than max(0.25 m, 1.5x the largest plan-to-plan divergence in this run's pre-activation window); cmd_changed = |linear.x| moving by more than max(0.05 m/s, 1.5x the largest pre-activation excursion), skipped entirely when fewer than two commands precede the activation; recovery_started = Nav2's number_of_recoveries incrementing. Earliest wins, and the trigger is recorded. Both material-change triggers are calibrated against this run's own pre-activation window (10 s sim) and bounded to 2 s sim after activation. At these settings, synthetic activation times swept at 1 s intervals across four fault-free missions still fired cmd_changed on 3 of 38, 5 of 38, 3 of 39 and 3 of 38 instants, and plan_diverged on none of them: a single reported response is weak evidence on its own and must be read beside a control run",
+    "reason": "no FaultEvent reached state=activated; states seen: none"
+   },
+   "obstacle_min_clearance_m": {
+    "value": null,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the spawn_obstacle poses run.json records as applied, converted the same way",
+    "definition": "smallest (distance from the truth position to the surface of an applied spawned obstacle, minus the footprint radius this robot is scored with) over the interval each obstacle EXISTED - from its activated FaultEvent to its cleared one, or to the end of the mission window. The obstacle is treated as the oriented rectangle it was spawned as; the footprint as a circle of the radius run.json's pre-flight recorded, falling back to the run's robot profile footprint.radius_m. A negative value is penetration",
+    "reason": "no spawn_obstacle intervention was applied in this run"
+   },
+   "scan_degradation_divergence": {
+    "value": null,
+    "unit": "counts and fraction",
+    "source": "/scan and /scan_raw, joined on header stamp",
+    "definition": "/scan compared against /scan_raw beam by beam on IDENTICAL header stamps - the relay republishes the sensor's own header, so an exact stamp key is the only join that compares the same sweep. Two ranges are equal when both are +inf or exactly equal; no tolerance, which would hide the injected noise. pairs_divergent_before_activation must be 0 for \"the streams differ only after the fault\" to hold, and a non-zero value is the measurement rather than an error. pairs_unmatched and pairs_length_mismatch count the sweeps that were NOT compared - no raw entry at that stamp, or a partner with a different beam count - so the denominator behind pairs_compared is reported rather than hidden; a non-zero count means the relay or the recorder dropped sweeps",
+    "reason": "no scan_degradation FaultEvent reached state=activated in this run"
+   }
+  },
+  "meta": {
+   "experiment_id": "baseline_roomba",
+   "run_dir": "/ws/runs/baseline_roomba_20261026T093631Z",
+   "bag": "/ws/runs/baseline_roomba_20261026T093631Z/bag",
+   "scenario": {
+    "world": "ral_apartment",
+    "robot": "roomba",
+    "seed": 1
+   },
+   "mission_window": {
+    "t_accept_sim": 29.414,
+    "t_terminal_sim": 66.954,
+    "source": "/mission_state",
+    "final_state": "succeeded"
+   },
+   "robot": "roomba",
+   "robot_profile_path": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/config/robots/roomba.yaml",
+   "estimate_source": {
+    "topic": "/amcl_pose",
+    "type": "geometry_msgs/msg/PoseWithCovarianceStamped",
+    "frame": "map",
+    "label": "AMCL (nav2_amcl) over /scan",
+    "tf_source": "diff_drive_bridge",
+    "uncertainty": {
+     "kind": "covariance_trace",
+     "converged_below": 0.25
+    }
+   },
+   "mission_driver": "nav2",
+   "world_to_map": {
+    "x": 0.5,
+    "y": 0.5,
+    "yaw": 0.0
+   },
+   "world_to_map_source": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/maps/apartment_frames.yaml",
+   "world_to_ekf_local": null,
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "mission_result_source": "/navigate_to_pose/_action/status",
+   "pair_counts": {
+    "est_error": 103,
+    "est_error_at_start_pose": 23,
+    "cmd_vs_achieved": 375
+   },
+   "missing_topics": [],
+   "topic_status": {
+    "/ground_truth/odom": "read",
+    "/mission_state": "read",
+    "/fault_events": "read",
+    "/scan": "read",
+    "/scan_raw": "read",
+    "/bumper": "read",
+    "/map": "read",
+    "/amcl_pose": "read",
+    "/cmd_vel": "read",
+    "/initialpose": "read",
+    "/plan": "read",
+    "/navigate_to_pose/_action/status": "read",
+    "/navigate_to_pose/_action/feedback": "read"
+   },
+   "plan_detection_resolution_s": 1.0,
+   "plan_detection_resolution_source": "nav2_bt_navigator navigate_to_pose_w_replanning_and_recovery.xml: ComputePathToPose is wrapped in <RateController hz=\"1.0\">",
+   "metrics_version": 5
+  },
+  "interventions": [],
+  "preflight": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (10.000, 6.000), grid cell (210, 131) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "preflight_initial": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (0.000, 0.000), grid cell (10, 11) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "bumper_liveness": {
+   "ros_publishers": [
+    "ros_gz_bridge"
+   ],
+   "gz_topic": "/world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact",
+   "gz_topic_present": true,
+   "gz_detail": "listed by gz topic -l",
+   "alive": true
+  },
+  "bag": [
+   [
+    "/scan",
+    "sensor_msgs/msg/LaserScan",
+    565
+   ],
+   [
+    "/plan",
+    "nav_msgs/msg/Path",
+    37
+   ],
+   [
+    "/mission_state",
+    "ral_interfaces/msg/MissionState",
+    4
+   ],
+   [
+    "/fault_events",
+    "ral_interfaces/msg/FaultEvent",
+    0
+   ],
+   [
+    "/cmd_vel",
+    "geometry_msgs/msg/Twist",
+    1007
+   ],
+   [
+    "/rosout",
+    "rcl_interfaces/msg/Log",
+    93
+   ],
+   [
+    "/odom",
+    "nav_msgs/msg/Odometry",
+    2875
+   ],
+   [
+    "/amcl_pose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    133
+   ],
+   [
+    "/map",
+    "nav_msgs/msg/OccupancyGrid",
+    1
+   ],
+   [
+    "/tf_static",
+    "tf2_msgs/msg/TFMessage",
+    2
+   ],
+   [
+    "/scan_raw",
+    "sensor_msgs/msg/LaserScan",
+    575
+   ],
+   [
+    "/tf",
+    "tf2_msgs/msg/TFMessage",
+    4586
+   ],
+   [
+    "/ground_truth/odom",
+    "nav_msgs/msg/Odometry",
+    2874
+   ],
+   [
+    "/initialpose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    3
+   ],
+   [
+    "/clock",
+    "rosgraph_msgs/msg/Clock",
+    28741
+   ],
+   [
+    "/bumper",
+    "ros_gz_interfaces/msg/Contacts",
+    0
+   ],
+   [
+    "/faults/active",
+    "ral_interfaces/msg/ActiveFaults",
+    1
+   ],
+   [
+    "/navigate_to_pose/_action/status",
+    "action_msgs/msg/GoalStatusArray",
+    2
+   ],
+   [
+    "/navigate_to_pose/_action/feedback",
+    "nav2_msgs/action/NavigateToPose_FeedbackMessage",
+    3799
+   ],
+   [
+    "/joint_states",
+    "sensor_msgs/msg/JointState",
+    28731
+   ]
+  ],
+  "bag_duration_s": 57.49400000000001,
+  "scenario_yaml": "# Copyright 2026 Resilient Autonomy Lab\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n#\n# The Phase 2 mission, run through the Phase 3 harness: the same start, the\n# same goal in room 3, reachable from room 2 only through wall B's 0.70 m\n# doorway. Deliberately identical so this run's numbers are comparable with\n# docs/nav-closed-loop.md, which measured the same mission by hand.\n#\n# initial_pose and goal are in the gz WORLD frame, which is the frame the\n# world SDF, the spawn pose and ground truth are all expressed in. The runner\n# converts them to `map` with the measured world_to_map alignment before\n# publishing /initialpose or sending NavigateToPose, and records BOTH forms in\n# run.json so a reader can tell which frame a number is in.\n#\n# `seed` seeds ral_faults' RNG (Phase 4.2's scan noise and dropout) and\n# nothing else. AMCL is not seedable; see docs/repeatability.md.\n\nexperiment_id: baseline_roomba\nrobot: roomba\nworld: ral_apartment\nseed: 1\ninitial_pose: {x: 0.5, y: 0.5, yaw: 0.0}\ngoal: {x: 10.5, y: 6.5, yaw: 1.57}\ntimeout_sec: 180\ninterventions: []\n",
+  "log_tail": " sending signal 'SIGTERM' to process[component_container_isolated-10]\n[component_container_isolated-10] [INFO] [1793007471.848528759] [rclcpp]: signal_handler(SIGINT/SIGTERM)\n[ERROR] [component_container_isolated-10]: process[component_container_isolated-10] failed to terminate '10.0' seconds after receiving 'SIGTERM', escalating to 'SIGKILL'\n[INFO] [component_container_isolated-10]: sending signal 'SIGKILL' to process[component_container_isolated-10]\n[ERROR] [component_container_isolated-10]: process has died [pid 263, exit code -9, cmd '/opt/ros/humble/lib/rclcpp_components/component_container_isolated --ros-args --log-level info --ros-args -r __node:=nav2_container --params-file /tmp/launch_params_syhj4fn_ --params-file /tmp/launch_params_muq1rjix -r /tf:=tf -r /tf_static:=tf_static'].\n",
+  "bag_record_log_tail": " by type definition search, definition wll be left empty.\n[INFO] [1793007407.798031181] [rosbag2_recorder]: Subscribed to topic '/navigate_to_pose/_action/feedback'\n[INFO] [1793007407.808609983] [rosbag2_recorder]: Subscribed to topic '/navigate_to_pose/_action/status'\n[INFO] [1793007407.810488690] [rosbag2_recorder]: Subscribed to topic '/plan'\n[INFO] [1793007408.657090574] [rosbag2_recorder]: Subscribed to topic '/scan'\n[INFO] [1793007408.657208794] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...\n[INFO] [1793007465.771762230] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while\n[INFO] [1793007465.778074135] [rosbag2_recorder]: Event publisher thread: Exiting\n[INFO] [1793007465.778403942] [rosbag2_recorder]: Recording stopped\n",
+  "has_plot": false,
+  "rtf_samples": "1.0015142896058842, 1.003251034978849, 0.99798656211094117",
+  "goal_map": [
+   10.0,
+   6.0,
+   1.57
+  ],
+  "goal_world": [
+   10.5,
+   6.5,
+   1.57
+  ],
+  "initial_map": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "initial_world": [
+   0.5,
+   0.5,
+   0.0
+  ]
+ },
+ "baseline_roomba_20261025T133934Z": {
+  "id": "baseline_roomba_20261025T133934Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   30.214000000000002,
+   67.952
+  ],
+  "wall": [
+   "2026-10-25T13:39:34Z",
+   "2026-10-25T13:41:00Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "27fd32feb11a2f788a95d99be452883e4165cd7f45875f850389f0cecba61696",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true,
+  "metrics": {
+   "mission_duration_s": {
+    "value": 37.738,
+    "unit": "s (sim)",
+    "source": "/mission_state",
+    "definition": "terminal MissionState stamp minus the goal_accepted stamp",
+    "reason": null
+   },
+   "path_length_m": {
+    "value": 13.53664934089278,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "sum of |delta xy| between consecutive truth samples inside the mission window, excluding any step longer than 3.0x this plant maximum (0.46 m/s, from the run's robot profile) for its own dt plus 0.05 m",
+    "reason": null
+   },
+   "teleport_excluded_m": {
+    "value": 0.0,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "summed length of the 0 step(s) path_length_m excluded as non-travel (kidnap, respawn or a dropped interval); a measured zero means no such step occurred",
+    "reason": null
+   },
+   "goal_pose_error_m": {
+    "value": 0.031055910675701414,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the scenario goal converted the same way",
+    "definition": "|last truth sample at or before the terminal stamp, in map, minus the goal in map|",
+    "reason": null
+   },
+   "est_error_mean_m": {
+    "value": 0.07886032402428214,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; mean over 104 pairs",
+    "reason": null
+   },
+   "est_error_max_m": {
+    "value": 0.12367614480837194,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; max over 104 pairs",
+    "reason": null
+   },
+   "est_error_at_start_pose_m": {
+    "value": 0.07697501091771607,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean |estimate - truth| while the robot is at its start pose and rotating in place: from the first /amcl_pose whose covariance trace is below 0.25 to goal acceptance, excluding any pair whose truth position has already moved more than 0.05 m from the truth position at acceptance. The robot is NOT stationary in this window - AMCL publishes on filter update and its filter updates on motion, so a stopped robot publishes nothing at all; the in-place warm-up rotation leaves xy unchanged, which is what the 0.05 m guard asserts. The guard is applied to the TRUTH half of each pair; within the 50 ms pairing window the body can travel at most 0.023 m, so the bound actually enforced on the estimate half is 0.05 + 0.023 m. It is map error plus world->map alignment error AT THAT ONE POSE, measured, and it is the scale against which in-mission estimate error should be read. It is NOT a lower bound: both terms vary across the map, so in-mission error below this value is normal.; mean over 24 pairs in [16.50, 30.21] s sim",
+    "reason": null
+   },
+   "est_cov_trace_max": {
+    "value": 0.08149573332197463,
+    "unit": "",
+    "source": "/amcl_pose",
+    "definition": "max of covariance[0] + covariance[7] + covariance[35] in the window",
+    "reason": null
+   },
+   "est_pos_horiz_accuracy_max_m": {
+    "value": null,
+    "unit": "m",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "max pos_horiz_accuracy and max pos_horiz_ratio over none (the profile names no uncertainty topic) inside the mission window: the estimator's OWN assessment of its horizontal position accuracy, which is what a platform with no pose covariance can honestly report",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports est_cov_trace_max instead"
+   },
+   "est_status_flags": {
+    "value": null,
+    "unit": "fraction",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "fraction of none (the profile names no uncertainty topic) messages inside the mission window in which each ESTIMATOR_STATUS flag was true, plus the message count. The estimator's OWN assessment of which of its states it considers healthy",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports its filter health as est_cov_trace_max instead"
+   },
+   "localization_converged_sim_s": {
+    "value": 2.824,
+    "unit": "s (sim)",
+    "source": "/initialpose, /amcl_pose",
+    "definition": "first /amcl_pose whose covariance trace is below 0.25, minus the first /initialpose stamp. AMCL updates its filter on MOTION, so the runner rotates the robot in place while waiting; this measures that wait",
+    "reason": null
+   },
+   "collision_count": {
+    "value": 0,
+    "unit": "count",
+    "source": "/bumper",
+    "definition": "/bumper messages with a non-empty contacts list inside the window, debounced at 0.5 s sim per colliding pair (gz reports a contact every physics step while two bodies touch); 0 message(s) recorded. A gz contact sensor publishes only on contact, so this zero is a measurement only because the path was shown to be alive in this run: ['ros_gz_bridge'] publishing /bumper, and gz topic /world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact listed by gz topic -l",
+    "reason": null
+   },
+   "plan_publications": {
+    "value": 38,
+    "unit": "count",
+    "source": "/plan",
+    "definition": "count of /plan messages inside the window. This is how often the behaviour tree's RateController (hz=1.0) published a path, NOT a count of replans: the BT republishes at 1 Hz with or without a fault",
+    "reason": null
+   },
+   "stopped_time_s": {
+    "value": 0.0660000000000025,
+    "unit": "s (sim)",
+    "source": "/cmd_vel",
+    "definition": "sim seconds inside the window with |linear.x| < 0.01 and |angular.z| < 0.01, zero-order hold on the bag log time (sim), the last command held to the terminal stamp",
+    "reason": null
+   },
+   "mission_result": {
+    "value": {
+     "state": "succeeded",
+     "outcome": "nav2:STATUS_SUCCEEDED",
+     "source": "/navigate_to_pose/_action/status"
+    },
+    "unit": "",
+    "source": "/navigate_to_pose/_action/status",
+    "definition": "the action status of THIS goal, by UUID, as the server reported it. NavigateToPose's result payload is std_msgs/Empty, so the GoalStatus code is the only verbatim outcome the action offers",
+    "reason": null
+   },
+   "recoveries": {
+    "value": 0,
+    "unit": "count",
+    "source": "/navigate_to_pose/_action/feedback",
+    "definition": "max number_of_recoveries across NavigateToPose feedback inside the window. Nav2's own count of behaviour-tree recovery executions, never inferred from /plan or /cmd_vel",
+    "reason": null
+   },
+   "cmd_vs_achieved": {
+    "value": {
+     "linear": {
+      "mean_abs_error": 0.003546487294057225,
+      "max_abs_error": 0.061123448377262996
+     },
+     "angular": {
+      "mean_abs_error": 0.027857496979431934,
+      "max_abs_error": 0.22250826527456524
+     },
+     "samples": 377
+    },
+    "unit": "m/s and rad/s",
+    "source": "/cmd_vel (zero-order hold) and /ground_truth/odom (differentiated)",
+    "definition": "commanded and achieved velocity resampled onto a 10.0 Hz grid over the window and compared sample by sample. Achieved velocity is a central difference of truth POSE, smoothed over 3 samples: forward speed is the body-frame projection of the xy difference on the heading, angular rate is the wrapped yaw difference. The truth message does carry a twist, but it is a raw 50 Hz finite difference stamped on a different grid and is marked unknown (twist.covariance[0] = -1) whenever two poses share a stamp, so it is not used here. The command series is stamped by the recorder and the truth series by the publisher; the measured offset between the two bases in this stack is under 35 ms, against a 100 ms grid step",
+    "reason": null
+   },
+   "speed_vs_target": {
+    "value": null,
+    "unit": "m/s and fraction",
+    "source": "/ground_truth/odom (differentiated) against the robot profile's plant.max_linear_m_s",
+    "definition": "achieved forward speed on the same 10.0 Hz grid cmd_vs_achieved uses, against 0.46 m/s - the cruise speed this platform is configured with (CRUISE_SPEED/WP_SPEED, recorded in the profile as plant.max_linear_m_s). deficit_fraction is 1 - mean_achieved / target, clamped at 0, so a vehicle at its configured speed reads 0 and a halted one reads 1. after_activation repeats the measurement from the first mobility_fault that reached state=activated to the end of the window, which is the number a mobility fault is read from. ACHIEVED SPEED IS SIMULATOR TRUTH, used here as an evaluation signal: the robot neither measured nor reported it, and no claim is made that it knew it was slow",
+    "reason": "this platform IS commanded in velocity on /cmd_vel; its speed is scored against that command by cmd_vs_achieved rather than against a configured cruise speed"
+   },
+   "fault_to_response_s": {
+    "value": null,
+    "unit": "list of s (sim)",
+    "source": "/fault_events, /plan, /cmd_vel, /navigate_to_pose/_action/feedback",
+    "definition": "per FaultEvent that reached state=activated: the first MATERIAL change after it. plan_diverged = a /plan leaving the last pre-activation plan by more than max(0.25 m, 1.5x the largest plan-to-plan divergence in this run's pre-activation window); cmd_changed = |linear.x| moving by more than max(0.05 m/s, 1.5x the largest pre-activation excursion), skipped entirely when fewer than two commands precede the activation; recovery_started = Nav2's number_of_recoveries incrementing. Earliest wins, and the trigger is recorded. Both material-change triggers are calibrated against this run's own pre-activation window (10 s sim) and bounded to 2 s sim after activation. At these settings, synthetic activation times swept at 1 s intervals across four fault-free missions still fired cmd_changed on 3 of 38, 5 of 38, 3 of 39 and 3 of 38 instants, and plan_diverged on none of them: a single reported response is weak evidence on its own and must be read beside a control run",
+    "reason": "no FaultEvent reached state=activated; states seen: none"
+   },
+   "obstacle_min_clearance_m": {
+    "value": null,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the spawn_obstacle poses run.json records as applied, converted the same way",
+    "definition": "smallest (distance from the truth position to the surface of an applied spawned obstacle, minus the footprint radius this robot is scored with) over the interval each obstacle EXISTED - from its activated FaultEvent to its cleared one, or to the end of the mission window. The obstacle is treated as the oriented rectangle it was spawned as; the footprint as a circle of the radius run.json's pre-flight recorded, falling back to the run's robot profile footprint.radius_m. A negative value is penetration",
+    "reason": "no spawn_obstacle intervention was applied in this run"
+   },
+   "scan_degradation_divergence": {
+    "value": null,
+    "unit": "counts and fraction",
+    "source": "/scan and /scan_raw, joined on header stamp",
+    "definition": "/scan compared against /scan_raw beam by beam on IDENTICAL header stamps - the relay republishes the sensor's own header, so an exact stamp key is the only join that compares the same sweep. Two ranges are equal when both are +inf or exactly equal; no tolerance, which would hide the injected noise. pairs_divergent_before_activation must be 0 for \"the streams differ only after the fault\" to hold, and a non-zero value is the measurement rather than an error. pairs_unmatched and pairs_length_mismatch count the sweeps that were NOT compared - no raw entry at that stamp, or a partner with a different beam count - so the denominator behind pairs_compared is reported rather than hidden; a non-zero count means the relay or the recorder dropped sweeps",
+    "reason": "no scan_degradation FaultEvent reached state=activated in this run"
+   }
+  },
+  "meta": {
+   "experiment_id": "baseline_roomba",
+   "run_dir": "/ws/runs/baseline_roomba_20261025T133934Z",
+   "bag": "/ws/runs/baseline_roomba_20261025T133934Z/bag",
+   "scenario": {
+    "world": "ral_apartment",
+    "robot": "roomba",
+    "seed": 1
+   },
+   "mission_window": {
+    "t_accept_sim": 30.214,
+    "t_terminal_sim": 67.952,
+    "source": "/mission_state",
+    "final_state": "succeeded"
+   },
+   "robot": "roomba",
+   "robot_profile_path": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/config/robots/roomba.yaml",
+   "estimate_source": {
+    "topic": "/amcl_pose",
+    "type": "geometry_msgs/msg/PoseWithCovarianceStamped",
+    "frame": "map",
+    "label": "AMCL (nav2_amcl) over /scan",
+    "tf_source": "diff_drive_bridge",
+    "uncertainty": {
+     "kind": "covariance_trace",
+     "converged_below": 0.25
+    }
+   },
+   "mission_driver": "nav2",
+   "world_to_map": {
+    "x": 0.5,
+    "y": 0.5,
+    "yaw": 0.0
+   },
+   "world_to_map_source": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/maps/apartment_frames.yaml",
+   "world_to_ekf_local": null,
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "mission_result_source": "/navigate_to_pose/_action/status",
+   "pair_counts": {
+    "est_error": 104,
+    "est_error_at_start_pose": 24,
+    "cmd_vs_achieved": 377
+   },
+   "missing_topics": [],
+   "topic_status": {
+    "/ground_truth/odom": "read",
+    "/mission_state": "read",
+    "/fault_events": "read",
+    "/scan": "read",
+    "/scan_raw": "read",
+    "/bumper": "read",
+    "/map": "read",
+    "/amcl_pose": "read",
+    "/cmd_vel": "read",
+    "/initialpose": "read",
+    "/plan": "read",
+    "/navigate_to_pose/_action/status": "read",
+    "/navigate_to_pose/_action/feedback": "read"
+   },
+   "plan_detection_resolution_s": 1.0,
+   "plan_detection_resolution_source": "nav2_bt_navigator navigate_to_pose_w_replanning_and_recovery.xml: ComputePathToPose is wrapped in <RateController hz=\"1.0\">",
+   "metrics_version": 5
+  },
+  "interventions": [],
+  "preflight": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (10.000, 6.000), grid cell (210, 131) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "preflight_initial": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (0.000, 0.000), grid cell (10, 11) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "bumper_liveness": {
+   "ros_publishers": [
+    "ros_gz_bridge"
+   ],
+   "gz_topic": "/world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact",
+   "gz_topic_present": true,
+   "gz_detail": "listed by gz topic -l",
+   "alive": true
+  },
+  "bag": [
+   [
+    "/map",
+    "nav_msgs/msg/OccupancyGrid",
+    1
+   ],
+   [
+    "/rosout",
+    "rcl_interfaces/msg/Log",
+    169
+   ],
+   [
+    "/amcl_pose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    133
+   ],
+   [
+    "/odom",
+    "nav_msgs/msg/Odometry",
+    2899
+   ],
+   [
+    "/scan_raw",
+    "sensor_msgs/msg/LaserScan",
+    580
+   ],
+   [
+    "/tf_static",
+    "tf2_msgs/msg/TFMessage",
+    2
+   ],
+   [
+    "/plan",
+    "nav_msgs/msg/Path",
+    38
+   ],
+   [
+    "/scan",
+    "sensor_msgs/msg/LaserScan",
+    580
+   ],
+   [
+    "/tf",
+    "tf2_msgs/msg/TFMessage",
+    4630
+   ],
+   [
+    "/ground_truth/odom",
+    "nav_msgs/msg/Odometry",
+    2901
+   ],
+   [
+    "/bumper",
+    "ros_gz_interfaces/msg/Contacts",
+    0
+   ],
+   [
+    "/faults/active",
+    "ral_interfaces/msg/ActiveFaults",
+    1
+   ],
+   [
+    "/clock",
+    "rosgraph_msgs/msg/Clock",
+    28995
+   ],
+   [
+    "/initialpose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    3
+   ],
+   [
+    "/navigate_to_pose/_action/status",
+    "action_msgs/msg/GoalStatusArray",
+    2
+   ],
+   [
+    "/navigate_to_pose/_action/feedback",
+    "nav2_msgs/action/NavigateToPose_FeedbackMessage",
+    3841
+   ],
+   [
+    "/joint_states",
+    "sensor_msgs/msg/JointState",
+    28991
+   ],
+   [
+    "/cmd_vel",
+    "geometry_msgs/msg/Twist",
+    1022
+   ],
+   [
+    "/fault_events",
+    "ral_interfaces/msg/FaultEvent",
+    0
+   ],
+   [
+    "/mission_state",
+    "ral_interfaces/msg/MissionState",
+    4
+   ]
+  ],
+  "bag_duration_s": 58.012,
+  "scenario_yaml": "# Copyright 2026 Resilient Autonomy Lab\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n#\n# The Phase 2 mission, run through the Phase 3 harness: the same start, the\n# same goal in room 3, reachable from room 2 only through wall B's 0.70 m\n# doorway. Deliberately identical so this run's numbers are comparable with\n# docs/nav-closed-loop.md, which measured the same mission by hand.\n#\n# initial_pose and goal are in the gz WORLD frame, which is the frame the\n# world SDF, the spawn pose and ground truth are all expressed in. The runner\n# converts them to `map` with the measured world_to_map alignment before\n# publishing /initialpose or sending NavigateToPose, and records BOTH forms in\n# run.json so a reader can tell which frame a number is in.\n#\n# `seed` seeds ral_faults' RNG (Phase 4.2's scan noise and dropout) and\n# nothing else. AMCL is not seedable; see docs/repeatability.md.\n\nexperiment_id: baseline_roomba\nrobot: roomba\nworld: ral_apartment\nseed: 1\ninitial_pose: {x: 0.5, y: 0.5, yaw: 0.0}\ngoal: {x: 10.5, y: 6.5, yaw: 1.57}\ntimeout_sec: 180\ninterventions: []\n",
+  "log_tail": " sending signal 'SIGTERM' to process[component_container_isolated-10]\n[component_container_isolated-10] [INFO] [1792935655.564474115] [rclcpp]: signal_handler(SIGINT/SIGTERM)\n[ERROR] [component_container_isolated-10]: process[component_container_isolated-10] failed to terminate '10.0' seconds after receiving 'SIGTERM', escalating to 'SIGKILL'\n[INFO] [component_container_isolated-10]: sending signal 'SIGKILL' to process[component_container_isolated-10]\n[ERROR] [component_container_isolated-10]: process has died [pid 262, exit code -9, cmd '/opt/ros/humble/lib/rclcpp_components/component_container_isolated --ros-args --log-level info --ros-args -r __node:=nav2_container --params-file /tmp/launch_params_t8do3vip --params-file /tmp/launch_params_guikelrw -r /tf:=tf -r /tf_static:=tf_static'].\n",
+  "bag_record_log_tail": "1792935591.363489037] [rosbag2_recorder]: Subscribed to topic '/navigate_to_pose/_action/status'\n[INFO] [1792935591.365239967] [rosbag2_recorder]: Overriding subscription profile for /map\n[INFO] [1792935591.366302508] [rosbag2_recorder]: Subscribed to topic '/map'\n[INFO] [1792935591.367567715] [rosbag2_recorder]: Subscribed to topic '/amcl_pose'\n[INFO] [1792935591.369226228] [rosbag2_recorder]: Subscribed to topic '/plan'\n[INFO] [1792935591.369316284] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...\n[INFO] [1792935649.985847741] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while\n[INFO] [1792935649.996920662] [rosbag2_recorder]: Event publisher thread: Exiting\n[INFO] [1792935649.999868721] [rosbag2_recorder]: Recording stopped\n",
+  "has_plot": false,
+  "rtf_samples": "0.99871714782362053, 0.9979273049875409, 1.0030190874532343",
+  "goal_map": [
+   10.0,
+   6.0,
+   1.57
+  ],
+  "goal_world": [
+   10.5,
+   6.5,
+   1.57
+  ],
+  "initial_map": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "initial_world": [
+   0.5,
+   0.5,
+   0.0
+  ]
+ },
+ "baseline_roomba_20261025T133742Z": {
+  "id": "baseline_roomba_20261025T133742Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   32.216,
+   69.696
+  ],
+  "wall": [
+   "2026-10-25T13:37:42Z",
+   "2026-10-25T13:39:16Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "27fd32feb11a2f788a95d99be452883e4165cd7f45875f850389f0cecba61696",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true,
+  "metrics": {
+   "mission_duration_s": {
+    "value": 37.48,
+    "unit": "s (sim)",
+    "source": "/mission_state",
+    "definition": "terminal MissionState stamp minus the goal_accepted stamp",
+    "reason": null
+   },
+   "path_length_m": {
+    "value": 13.486023203951053,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "sum of |delta xy| between consecutive truth samples inside the mission window, excluding any step longer than 3.0x this plant maximum (0.46 m/s, from the run's robot profile) for its own dt plus 0.05 m",
+    "reason": null
+   },
+   "teleport_excluded_m": {
+    "value": 0.0,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "summed length of the 0 step(s) path_length_m excluded as non-travel (kidnap, respawn or a dropped interval); a measured zero means no such step occurred",
+    "reason": null
+   },
+   "goal_pose_error_m": {
+    "value": 0.046855180210063935,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the scenario goal converted the same way",
+    "definition": "|last truth sample at or before the terminal stamp, in map, minus the goal in map|",
+    "reason": null
+   },
+   "est_error_mean_m": {
+    "value": 0.06880921270803712,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; mean over 103 pairs",
+    "reason": null
+   },
+   "est_error_max_m": {
+    "value": 0.10488988804958323,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; max over 103 pairs",
+    "reason": null
+   },
+   "est_error_at_start_pose_m": {
+    "value": 0.07449573922346575,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean |estimate - truth| while the robot is at its start pose and rotating in place: from the first /amcl_pose whose covariance trace is below 0.25 to goal acceptance, excluding any pair whose truth position has already moved more than 0.05 m from the truth position at acceptance. The robot is NOT stationary in this window - AMCL publishes on filter update and its filter updates on motion, so a stopped robot publishes nothing at all; the in-place warm-up rotation leaves xy unchanged, which is what the 0.05 m guard asserts. The guard is applied to the TRUTH half of each pair; within the 50 ms pairing window the body can travel at most 0.023 m, so the bound actually enforced on the estimate half is 0.05 + 0.023 m. It is map error plus world->map alignment error AT THAT ONE POSE, measured, and it is the scale against which in-mission estimate error should be read. It is NOT a lower bound: both terms vary across the map, so in-mission error below this value is normal.; mean over 23 pairs in [19.00, 32.22] s sim",
+    "reason": null
+   },
+   "est_cov_trace_max": {
+    "value": 0.0757912862042137,
+    "unit": "",
+    "source": "/amcl_pose",
+    "definition": "max of covariance[0] + covariance[7] + covariance[35] in the window",
+    "reason": null
+   },
+   "est_pos_horiz_accuracy_max_m": {
+    "value": null,
+    "unit": "m",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "max pos_horiz_accuracy and max pos_horiz_ratio over none (the profile names no uncertainty topic) inside the mission window: the estimator's OWN assessment of its horizontal position accuracy, which is what a platform with no pose covariance can honestly report",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports est_cov_trace_max instead"
+   },
+   "est_status_flags": {
+    "value": null,
+    "unit": "fraction",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "fraction of none (the profile names no uncertainty topic) messages inside the mission window in which each ESTIMATOR_STATUS flag was true, plus the message count. The estimator's OWN assessment of which of its states it considers healthy",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports its filter health as est_cov_trace_max instead"
+   },
+   "localization_converged_sim_s": {
+    "value": 2.7959999999999994,
+    "unit": "s (sim)",
+    "source": "/initialpose, /amcl_pose",
+    "definition": "first /amcl_pose whose covariance trace is below 0.25, minus the first /initialpose stamp. AMCL updates its filter on MOTION, so the runner rotates the robot in place while waiting; this measures that wait",
+    "reason": null
+   },
+   "collision_count": {
+    "value": 0,
+    "unit": "count",
+    "source": "/bumper",
+    "definition": "/bumper messages with a non-empty contacts list inside the window, debounced at 0.5 s sim per colliding pair (gz reports a contact every physics step while two bodies touch); 0 message(s) recorded. A gz contact sensor publishes only on contact, so this zero is a measurement only because the path was shown to be alive in this run: ['ros_gz_bridge'] publishing /bumper, and gz topic /world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact listed by gz topic -l",
+    "reason": null
+   },
+   "plan_publications": {
+    "value": 44,
+    "unit": "count",
+    "source": "/plan",
+    "definition": "count of /plan messages inside the window. This is how often the behaviour tree's RateController (hz=1.0) published a path, NOT a count of replans: the BT republishes at 1 Hz with or without a fault",
+    "reason": null
+   },
+   "stopped_time_s": {
+    "value": 0.1039999999999921,
+    "unit": "s (sim)",
+    "source": "/cmd_vel",
+    "definition": "sim seconds inside the window with |linear.x| < 0.01 and |angular.z| < 0.01, zero-order hold on the bag log time (sim), the last command held to the terminal stamp",
+    "reason": null
+   },
+   "mission_result": {
+    "value": {
+     "state": "succeeded",
+     "outcome": "nav2:STATUS_SUCCEEDED",
+     "source": "/navigate_to_pose/_action/status"
+    },
+    "unit": "",
+    "source": "/navigate_to_pose/_action/status",
+    "definition": "the action status of THIS goal, by UUID, as the server reported it. NavigateToPose's result payload is std_msgs/Empty, so the GoalStatus code is the only verbatim outcome the action offers",
+    "reason": null
+   },
+   "recoveries": {
+    "value": 0,
+    "unit": "count",
+    "source": "/navigate_to_pose/_action/feedback",
+    "definition": "max number_of_recoveries across NavigateToPose feedback inside the window. Nav2's own count of behaviour-tree recovery executions, never inferred from /plan or /cmd_vel",
+    "reason": null
+   },
+   "cmd_vs_achieved": {
+    "value": {
+     "linear": {
+      "mean_abs_error": 0.003260298135750472,
+      "max_abs_error": 0.0739364093675885
+     },
+     "angular": {
+      "mean_abs_error": 0.02818161673665755,
+      "max_abs_error": 0.24282277633998234
+     },
+     "samples": 374
+    },
+    "unit": "m/s and rad/s",
+    "source": "/cmd_vel (zero-order hold) and /ground_truth/odom (differentiated)",
+    "definition": "commanded and achieved velocity resampled onto a 10.0 Hz grid over the window and compared sample by sample. Achieved velocity is a central difference of truth POSE, smoothed over 3 samples: forward speed is the body-frame projection of the xy difference on the heading, angular rate is the wrapped yaw difference. The truth message does carry a twist, but it is a raw 50 Hz finite difference stamped on a different grid and is marked unknown (twist.covariance[0] = -1) whenever two poses share a stamp, so it is not used here. The command series is stamped by the recorder and the truth series by the publisher; the measured offset between the two bases in this stack is under 35 ms, against a 100 ms grid step",
+    "reason": null
+   },
+   "speed_vs_target": {
+    "value": null,
+    "unit": "m/s and fraction",
+    "source": "/ground_truth/odom (differentiated) against the robot profile's plant.max_linear_m_s",
+    "definition": "achieved forward speed on the same 10.0 Hz grid cmd_vs_achieved uses, against 0.46 m/s - the cruise speed this platform is configured with (CRUISE_SPEED/WP_SPEED, recorded in the profile as plant.max_linear_m_s). deficit_fraction is 1 - mean_achieved / target, clamped at 0, so a vehicle at its configured speed reads 0 and a halted one reads 1. after_activation repeats the measurement from the first mobility_fault that reached state=activated to the end of the window, which is the number a mobility fault is read from. ACHIEVED SPEED IS SIMULATOR TRUTH, used here as an evaluation signal: the robot neither measured nor reported it, and no claim is made that it knew it was slow",
+    "reason": "this platform IS commanded in velocity on /cmd_vel; its speed is scored against that command by cmd_vs_achieved rather than against a configured cruise speed"
+   },
+   "fault_to_response_s": {
+    "value": null,
+    "unit": "list of s (sim)",
+    "source": "/fault_events, /plan, /cmd_vel, /navigate_to_pose/_action/feedback",
+    "definition": "per FaultEvent that reached state=activated: the first MATERIAL change after it. plan_diverged = a /plan leaving the last pre-activation plan by more than max(0.25 m, 1.5x the largest plan-to-plan divergence in this run's pre-activation window); cmd_changed = |linear.x| moving by more than max(0.05 m/s, 1.5x the largest pre-activation excursion), skipped entirely when fewer than two commands precede the activation; recovery_started = Nav2's number_of_recoveries incrementing. Earliest wins, and the trigger is recorded. Both material-change triggers are calibrated against this run's own pre-activation window (10 s sim) and bounded to 2 s sim after activation. At these settings, synthetic activation times swept at 1 s intervals across four fault-free missions still fired cmd_changed on 3 of 38, 5 of 38, 3 of 39 and 3 of 38 instants, and plan_diverged on none of them: a single reported response is weak evidence on its own and must be read beside a control run",
+    "reason": "no FaultEvent reached state=activated; states seen: none"
+   },
+   "obstacle_min_clearance_m": {
+    "value": null,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the spawn_obstacle poses run.json records as applied, converted the same way",
+    "definition": "smallest (distance from the truth position to the surface of an applied spawned obstacle, minus the footprint radius this robot is scored with) over the interval each obstacle EXISTED - from its activated FaultEvent to its cleared one, or to the end of the mission window. The obstacle is treated as the oriented rectangle it was spawned as; the footprint as a circle of the radius run.json's pre-flight recorded, falling back to the run's robot profile footprint.radius_m. A negative value is penetration",
+    "reason": "no spawn_obstacle intervention was applied in this run"
+   },
+   "scan_degradation_divergence": {
+    "value": null,
+    "unit": "counts and fraction",
+    "source": "/scan and /scan_raw, joined on header stamp",
+    "definition": "/scan compared against /scan_raw beam by beam on IDENTICAL header stamps - the relay republishes the sensor's own header, so an exact stamp key is the only join that compares the same sweep. Two ranges are equal when both are +inf or exactly equal; no tolerance, which would hide the injected noise. pairs_divergent_before_activation must be 0 for \"the streams differ only after the fault\" to hold, and a non-zero value is the measurement rather than an error. pairs_unmatched and pairs_length_mismatch count the sweeps that were NOT compared - no raw entry at that stamp, or a partner with a different beam count - so the denominator behind pairs_compared is reported rather than hidden; a non-zero count means the relay or the recorder dropped sweeps",
+    "reason": "no scan_degradation FaultEvent reached state=activated in this run"
+   }
+  },
+  "meta": {
+   "experiment_id": "baseline_roomba",
+   "run_dir": "/ws/runs/baseline_roomba_20261025T133742Z",
+   "bag": "/ws/runs/baseline_roomba_20261025T133742Z/bag",
+   "scenario": {
+    "world": "ral_apartment",
+    "robot": "roomba",
+    "seed": 1
+   },
+   "mission_window": {
+    "t_accept_sim": 32.216,
+    "t_terminal_sim": 69.696,
+    "source": "/mission_state",
+    "final_state": "succeeded"
+   },
+   "robot": "roomba",
+   "robot_profile_path": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/config/robots/roomba.yaml",
+   "estimate_source": {
+    "topic": "/amcl_pose",
+    "type": "geometry_msgs/msg/PoseWithCovarianceStamped",
+    "frame": "map",
+    "label": "AMCL (nav2_amcl) over /scan",
+    "tf_source": "diff_drive_bridge",
+    "uncertainty": {
+     "kind": "covariance_trace",
+     "converged_below": 0.25
+    }
+   },
+   "mission_driver": "nav2",
+   "world_to_map": {
+    "x": 0.5,
+    "y": 0.5,
+    "yaw": 0.0
+   },
+   "world_to_map_source": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/maps/apartment_frames.yaml",
+   "world_to_ekf_local": null,
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "mission_result_source": "/navigate_to_pose/_action/status",
+   "pair_counts": {
+    "est_error": 103,
+    "est_error_at_start_pose": 23,
+    "cmd_vs_achieved": 374
+   },
+   "missing_topics": [],
+   "topic_status": {
+    "/ground_truth/odom": "read",
+    "/mission_state": "read",
+    "/fault_events": "read",
+    "/scan": "read",
+    "/scan_raw": "read",
+    "/bumper": "read",
+    "/map": "read",
+    "/amcl_pose": "read",
+    "/cmd_vel": "read",
+    "/initialpose": "read",
+    "/plan": "read",
+    "/navigate_to_pose/_action/status": "read",
+    "/navigate_to_pose/_action/feedback": "read"
+   },
+   "plan_detection_resolution_s": 1.0,
+   "plan_detection_resolution_source": "nav2_bt_navigator navigate_to_pose_w_replanning_and_recovery.xml: ComputePathToPose is wrapped in <RateController hz=\"1.0\">",
+   "metrics_version": 5
+  },
+  "interventions": [],
+  "preflight": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (10.000, 6.000), grid cell (210, 131) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "preflight_initial": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (0.000, 0.000), grid cell (10, 11) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "bumper_liveness": {
+   "ros_publishers": [
+    "ros_gz_bridge"
+   ],
+   "gz_topic": "/world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact",
+   "gz_topic_present": true,
+   "gz_detail": "listed by gz topic -l",
+   "alive": true
+  },
+  "bag": [
+   [
+    "/map",
+    "nav_msgs/msg/OccupancyGrid",
+    1
+   ],
+   [
+    "/ground_truth/odom",
+    "nav_msgs/msg/Odometry",
+    2956
+   ],
+   [
+    "/plan",
+    "nav_msgs/msg/Path",
+    44
+   ],
+   [
+    "/scan",
+    "sensor_msgs/msg/LaserScan",
+    591
+   ],
+   [
+    "/bumper",
+    "ros_gz_interfaces/msg/Contacts",
+    0
+   ],
+   [
+    "/tf",
+    "tf2_msgs/msg/TFMessage",
+    4785
+   ],
+   [
+    "/navigate_to_pose/_action/status",
+    "action_msgs/msg/GoalStatusArray",
+    2
+   ],
+   [
+    "/navigate_to_pose/_action/feedback",
+    "nav2_msgs/action/NavigateToPose_FeedbackMessage",
+    4422
+   ],
+   [
+    "/joint_states",
+    "sensor_msgs/msg/JointState",
+    30273
+   ],
+   [
+    "/amcl_pose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    131
+   ],
+   [
+    "/odom",
+    "nav_msgs/msg/Odometry",
+    3029
+   ],
+   [
+    "/rosout",
+    "rcl_interfaces/msg/Log",
+    282
+   ],
+   [
+    "/scan_raw",
+    "sensor_msgs/msg/LaserScan",
+    605
+   ],
+   [
+    "/tf_static",
+    "tf2_msgs/msg/TFMessage",
+    2
+   ],
+   [
+    "/clock",
+    "rosgraph_msgs/msg/Clock",
+    30276
+   ],
+   [
+    "/initialpose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    3
+   ],
+   [
+    "/cmd_vel",
+    "geometry_msgs/msg/Twist",
+    1132
+   ],
+   [
+    "/fault_events",
+    "ral_interfaces/msg/FaultEvent",
+    0
+   ],
+   [
+    "/mission_state",
+    "ral_interfaces/msg/MissionState",
+    4
+   ],
+   [
+    "/faults/active",
+    "ral_interfaces/msg/ActiveFaults",
+    1
+   ]
+  ],
+  "bag_duration_s": 60.584,
+  "scenario_yaml": "# Copyright 2026 Resilient Autonomy Lab\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n#\n# The Phase 2 mission, run through the Phase 3 harness: the same start, the\n# same goal in room 3, reachable from room 2 only through wall B's 0.70 m\n# doorway. Deliberately identical so this run's numbers are comparable with\n# docs/nav-closed-loop.md, which measured the same mission by hand.\n#\n# initial_pose and goal are in the gz WORLD frame, which is the frame the\n# world SDF, the spawn pose and ground truth are all expressed in. The runner\n# converts them to `map` with the measured world_to_map alignment before\n# publishing /initialpose or sending NavigateToPose, and records BOTH forms in\n# run.json so a reader can tell which frame a number is in.\n#\n# `seed` seeds ral_faults' RNG (Phase 4.2's scan noise and dropout) and\n# nothing else. AMCL is not seedable; see docs/repeatability.md.\n\nexperiment_id: baseline_roomba\nrobot: roomba\nworld: ral_apartment\nseed: 1\ninitial_pose: {x: 0.5, y: 0.5, yaw: 0.0}\ngoal: {x: 10.5, y: 6.5, yaw: 1.57}\ntimeout_sec: 180\ninterventions: []\n",
+  "log_tail": " [pid 65, exit code -11, cmd '/ws/ros2_ws/install/ral_eval/lib/ral_eval/ground_truth_node --ros-args -r __node:=ground_truth_node --params-file /tmp/launch_params_4j6as_68'].\n[ERROR] [component_container_isolated-10]: process[component_container_isolated-10] failed to terminate '10.0' seconds after receiving 'SIGTERM', escalating to 'SIGKILL'\n[INFO] [component_container_isolated-10]: sending signal 'SIGKILL' to process[component_container_isolated-10]\n[ERROR] [component_container_isolated-10]: process has died [pid 263, exit code -9, cmd '/opt/ros/humble/lib/rclcpp_components/component_container_isolated --ros-args --log-level info --ros-args -r __node:=nav2_container --params-file /tmp/launch_params_uuy70qor --params-file /tmp/launch_params_sjki37m6 -r /tf:=tf -r /tf_static:=tf_static'].\n",
+  "bag_record_log_tail": "1792935480.335984805] [rosbag2_recorder]: Subscribed to topic '/navigate_to_pose/_action/status'\n[INFO] [1792935480.337597029] [rosbag2_recorder]: Overriding subscription profile for /map\n[INFO] [1792935480.339220733] [rosbag2_recorder]: Subscribed to topic '/map'\n[INFO] [1792935480.341818466] [rosbag2_recorder]: Subscribed to topic '/amcl_pose'\n[INFO] [1792935480.344273104] [rosbag2_recorder]: Subscribed to topic '/plan'\n[INFO] [1792935480.344469702] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...\n[INFO] [1792935545.484527317] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while\n[INFO] [1792935545.500419881] [rosbag2_recorder]: Event publisher thread: Exiting\n[INFO] [1792935545.501123049] [rosbag2_recorder]: Recording stopped\n",
+  "has_plot": false,
+  "rtf_samples": "0.99968609856505053, 0.99933394392637309, 0.58036351649219009",
+  "goal_map": [
+   10.0,
+   6.0,
+   1.57
+  ],
+  "goal_world": [
+   10.5,
+   6.5,
+   1.57
+  ],
+  "initial_map": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "initial_world": [
+   0.5,
+   0.5,
+   0.0
+  ]
+ },
+ "baseline_roomba_20261025T133610Z": {
+  "id": "baseline_roomba_20261025T133610Z",
+  "scenario": "baseline_roomba",
+  "robot": "roomba",
+  "world": "ral_apartment",
+  "seed": 1,
+  "version": 5,
+  "exit": 0,
+  "state": "succeeded",
+  "outcome": "nav2:STATUS_SUCCEEDED",
+  "detail": "distance_remaining=0.11603768169879913, number_of_recoveries=0; from /navigate_to_pose status 4",
+  "sim": [
+   32.212,
+   70.27000000000001
+  ],
+  "wall": [
+   "2026-10-25T13:36:10Z",
+   "2026-10-25T13:37:38Z"
+  ],
+  "prov": {
+   "image_ref": "sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e",
+   "git_sha": "25c89d3fe45508a48ed88befd3bf30af31d0f57e+dirty",
+   "git_dirty": true,
+   "git_diff_sha256": "27fd32feb11a2f788a95d99be452883e4165cd7f45875f850389f0cecba61696",
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "scenario_sha256": "9bb5b50396e0fb7056ec44d917ee06ea0d6b79d8b30ad30f9944cb9b3d9e8e8f",
+   "nav2_params_sha256": "4753834be1fb5db8a2e772dc2cdeab893c9813f10e8d3e5fb3f601502511777b",
+   "autopilot_parm_sha256": null,
+   "firmware_sha": "437a3301cc335742e5807e6f10e1b819e0a5afa9",
+   "ros_domain_id": "42",
+   "launch_command": [
+    "ros2",
+    "launch",
+    "ral_bringup",
+    "roomba_nav.launch.py",
+    "world:=ral_apartment",
+    "robot:=roomba",
+    "seed:=1",
+    "spawn_x:=0.5",
+    "spawn_y:=0.5",
+    "spawn_yaw:=0.0"
+   ],
+   "world_to_map": [
+    0.5,
+    0.5,
+    0.0
+   ],
+   "world_to_ekf_local": null
+  },
+  "partial": false,
+  "note": "",
+  "scorable": true,
+  "metrics": {
+   "mission_duration_s": {
+    "value": 38.05799999999999,
+    "unit": "s (sim)",
+    "source": "/mission_state",
+    "definition": "terminal MissionState stamp minus the goal_accepted stamp",
+    "reason": null
+   },
+   "path_length_m": {
+    "value": 13.522015297133077,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "sum of |delta xy| between consecutive truth samples inside the mission window, excluding any step longer than 3.0x this plant maximum (0.46 m/s, from the run's robot profile) for its own dt plus 0.05 m",
+    "reason": null
+   },
+   "teleport_excluded_m": {
+    "value": 0.0,
+    "unit": "m",
+    "source": "/ground_truth/odom (frame world) mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "summed length of the 0 step(s) path_length_m excluded as non-travel (kidnap, respawn or a dropped interval); a measured zero means no such step occurred",
+    "reason": null
+   },
+   "goal_pose_error_m": {
+    "value": 0.01918854343178851,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the scenario goal converted the same way",
+    "definition": "|last truth sample at or before the terminal stamp, in map, minus the goal in map|",
+    "reason": null
+   },
+   "est_error_mean_m": {
+    "value": 0.061902096461190666,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; mean over 105 pairs",
+    "reason": null
+   },
+   "est_error_max_m": {
+    "value": 0.09887246911297559,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean and max |estimate - truth| over the mission window, the estimate being AMCL (nav2_amcl) over /scan; each estimate sample is paired with the nearest truth sample by HEADER stamp, and unpaired samples are dropped rather than matched further out; max over 105 pairs",
+    "reason": null
+   },
+   "est_error_at_start_pose_m": {
+    "value": 0.0779280115259148,
+    "unit": "m",
+    "source": "/amcl_pose (AMCL (nav2_amcl) over /scan) paired with /ground_truth/odom by header stamp within 50 ms, truth mapped to map by apartment_frames.yaml copied verbatim into env.json",
+    "definition": "mean |estimate - truth| while the robot is at its start pose and rotating in place: from the first /amcl_pose whose covariance trace is below 0.25 to goal acceptance, excluding any pair whose truth position has already moved more than 0.05 m from the truth position at acceptance. The robot is NOT stationary in this window - AMCL publishes on filter update and its filter updates on motion, so a stopped robot publishes nothing at all; the in-place warm-up rotation leaves xy unchanged, which is what the 0.05 m guard asserts. The guard is applied to the TRUTH half of each pair; within the 50 ms pairing window the body can travel at most 0.023 m, so the bound actually enforced on the estimate half is 0.05 + 0.023 m. It is map error plus world->map alignment error AT THAT ONE POSE, measured, and it is the scale against which in-mission estimate error should be read. It is NOT a lower bound: both terms vary across the map, so in-mission error below this value is normal.; mean over 23 pairs in [19.00, 32.21] s sim",
+    "reason": null
+   },
+   "est_cov_trace_max": {
+    "value": 0.06725770128610334,
+    "unit": "",
+    "source": "/amcl_pose",
+    "definition": "max of covariance[0] + covariance[7] + covariance[35] in the window",
+    "reason": null
+   },
+   "est_pos_horiz_accuracy_max_m": {
+    "value": null,
+    "unit": "m",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "max pos_horiz_accuracy and max pos_horiz_ratio over none (the profile names no uncertainty topic) inside the mission window: the estimator's OWN assessment of its horizontal position accuracy, which is what a platform with no pose covariance can honestly report",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports est_cov_trace_max instead"
+   },
+   "est_status_flags": {
+    "value": null,
+    "unit": "fraction",
+    "source": "none (the profile names no uncertainty topic)",
+    "definition": "fraction of none (the profile names no uncertainty topic) messages inside the mission window in which each ESTIMATOR_STATUS flag was true, plus the message count. The estimator's OWN assessment of which of its states it considers healthy",
+    "reason": "nav2_amcl publishes no ESTIMATOR_STATUS; this platform reports its filter health as est_cov_trace_max instead"
+   },
+   "localization_converged_sim_s": {
+    "value": 2.7779999999999987,
+    "unit": "s (sim)",
+    "source": "/initialpose, /amcl_pose",
+    "definition": "first /amcl_pose whose covariance trace is below 0.25, minus the first /initialpose stamp. AMCL updates its filter on MOTION, so the runner rotates the robot in place while waiting; this measures that wait",
+    "reason": null
+   },
+   "collision_count": {
+    "value": 0,
+    "unit": "count",
+    "source": "/bumper",
+    "definition": "/bumper messages with a non-empty contacts list inside the window, debounced at 0.5 s sim per colliding pair (gz reports a contact every physics step while two bodies touch); 0 message(s) recorded. A gz contact sensor publishes only on contact, so this zero is a measurement only because the path was shown to be alive in this run: ['ros_gz_bridge'] publishing /bumper, and gz topic /world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact listed by gz topic -l",
+    "reason": null
+   },
+   "plan_publications": {
+    "value": 38,
+    "unit": "count",
+    "source": "/plan",
+    "definition": "count of /plan messages inside the window. This is how often the behaviour tree's RateController (hz=1.0) published a path, NOT a count of replans: the BT republishes at 1 Hz with or without a fault",
+    "reason": null
+   },
+   "stopped_time_s": {
+    "value": 0.0799999999999983,
+    "unit": "s (sim)",
+    "source": "/cmd_vel",
+    "definition": "sim seconds inside the window with |linear.x| < 0.01 and |angular.z| < 0.01, zero-order hold on the bag log time (sim), the last command held to the terminal stamp",
+    "reason": null
+   },
+   "mission_result": {
+    "value": {
+     "state": "succeeded",
+     "outcome": "nav2:STATUS_SUCCEEDED",
+     "source": "/navigate_to_pose/_action/status"
+    },
+    "unit": "",
+    "source": "/navigate_to_pose/_action/status",
+    "definition": "the action status of THIS goal, by UUID, as the server reported it. NavigateToPose's result payload is std_msgs/Empty, so the GoalStatus code is the only verbatim outcome the action offers",
+    "reason": null
+   },
+   "recoveries": {
+    "value": 0,
+    "unit": "count",
+    "source": "/navigate_to_pose/_action/feedback",
+    "definition": "max number_of_recoveries across NavigateToPose feedback inside the window. Nav2's own count of behaviour-tree recovery executions, never inferred from /plan or /cmd_vel",
+    "reason": null
+   },
+   "cmd_vs_achieved": {
+    "value": {
+     "linear": {
+      "mean_abs_error": 0.0035923650003376493,
+      "max_abs_error": 0.046665883451404044
+     },
+     "angular": {
+      "mean_abs_error": 0.021860029827214987,
+      "max_abs_error": 0.2052266744734732
+     },
+     "samples": 380
+    },
+    "unit": "m/s and rad/s",
+    "source": "/cmd_vel (zero-order hold) and /ground_truth/odom (differentiated)",
+    "definition": "commanded and achieved velocity resampled onto a 10.0 Hz grid over the window and compared sample by sample. Achieved velocity is a central difference of truth POSE, smoothed over 3 samples: forward speed is the body-frame projection of the xy difference on the heading, angular rate is the wrapped yaw difference. The truth message does carry a twist, but it is a raw 50 Hz finite difference stamped on a different grid and is marked unknown (twist.covariance[0] = -1) whenever two poses share a stamp, so it is not used here. The command series is stamped by the recorder and the truth series by the publisher; the measured offset between the two bases in this stack is under 35 ms, against a 100 ms grid step",
+    "reason": null
+   },
+   "speed_vs_target": {
+    "value": null,
+    "unit": "m/s and fraction",
+    "source": "/ground_truth/odom (differentiated) against the robot profile's plant.max_linear_m_s",
+    "definition": "achieved forward speed on the same 10.0 Hz grid cmd_vs_achieved uses, against 0.46 m/s - the cruise speed this platform is configured with (CRUISE_SPEED/WP_SPEED, recorded in the profile as plant.max_linear_m_s). deficit_fraction is 1 - mean_achieved / target, clamped at 0, so a vehicle at its configured speed reads 0 and a halted one reads 1. after_activation repeats the measurement from the first mobility_fault that reached state=activated to the end of the window, which is the number a mobility fault is read from. ACHIEVED SPEED IS SIMULATOR TRUTH, used here as an evaluation signal: the robot neither measured nor reported it, and no claim is made that it knew it was slow",
+    "reason": "this platform IS commanded in velocity on /cmd_vel; its speed is scored against that command by cmd_vs_achieved rather than against a configured cruise speed"
+   },
+   "fault_to_response_s": {
+    "value": null,
+    "unit": "list of s (sim)",
+    "source": "/fault_events, /plan, /cmd_vel, /navigate_to_pose/_action/feedback",
+    "definition": "per FaultEvent that reached state=activated: the first MATERIAL change after it. plan_diverged = a /plan leaving the last pre-activation plan by more than max(0.25 m, 1.5x the largest plan-to-plan divergence in this run's pre-activation window); cmd_changed = |linear.x| moving by more than max(0.05 m/s, 1.5x the largest pre-activation excursion), skipped entirely when fewer than two commands precede the activation; recovery_started = Nav2's number_of_recoveries incrementing. Earliest wins, and the trigger is recorded. Both material-change triggers are calibrated against this run's own pre-activation window (10 s sim) and bounded to 2 s sim after activation. At these settings, synthetic activation times swept at 1 s intervals across four fault-free missions still fired cmd_changed on 3 of 38, 5 of 38, 3 of 39 and 3 of 38 instants, and plan_diverged on none of them: a single reported response is weak evidence on its own and must be read beside a control run",
+    "reason": "no FaultEvent reached state=activated; states seen: none"
+   },
+   "obstacle_min_clearance_m": {
+    "value": null,
+    "unit": "m",
+    "source": "/ground_truth/odom mapped to map by apartment_frames.yaml copied verbatim into env.json, against the spawn_obstacle poses run.json records as applied, converted the same way",
+    "definition": "smallest (distance from the truth position to the surface of an applied spawned obstacle, minus the footprint radius this robot is scored with) over the interval each obstacle EXISTED - from its activated FaultEvent to its cleared one, or to the end of the mission window. The obstacle is treated as the oriented rectangle it was spawned as; the footprint as a circle of the radius run.json's pre-flight recorded, falling back to the run's robot profile footprint.radius_m. A negative value is penetration",
+    "reason": "no spawn_obstacle intervention was applied in this run"
+   },
+   "scan_degradation_divergence": {
+    "value": null,
+    "unit": "counts and fraction",
+    "source": "/scan and /scan_raw, joined on header stamp",
+    "definition": "/scan compared against /scan_raw beam by beam on IDENTICAL header stamps - the relay republishes the sensor's own header, so an exact stamp key is the only join that compares the same sweep. Two ranges are equal when both are +inf or exactly equal; no tolerance, which would hide the injected noise. pairs_divergent_before_activation must be 0 for \"the streams differ only after the fault\" to hold, and a non-zero value is the measurement rather than an error. pairs_unmatched and pairs_length_mismatch count the sweeps that were NOT compared - no raw entry at that stamp, or a partner with a different beam count - so the denominator behind pairs_compared is reported rather than hidden; a non-zero count means the relay or the recorder dropped sweeps",
+    "reason": "no scan_degradation FaultEvent reached state=activated in this run"
+   }
+  },
+  "meta": {
+   "experiment_id": "baseline_roomba",
+   "run_dir": "/ws/runs/baseline_roomba_20261025T133610Z",
+   "bag": "/ws/runs/baseline_roomba_20261025T133610Z/bag",
+   "scenario": {
+    "world": "ral_apartment",
+    "robot": "roomba",
+    "seed": 1
+   },
+   "mission_window": {
+    "t_accept_sim": 32.212,
+    "t_terminal_sim": 70.27,
+    "source": "/mission_state",
+    "final_state": "succeeded"
+   },
+   "robot": "roomba",
+   "robot_profile_path": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/config/robots/roomba.yaml",
+   "estimate_source": {
+    "topic": "/amcl_pose",
+    "type": "geometry_msgs/msg/PoseWithCovarianceStamped",
+    "frame": "map",
+    "label": "AMCL (nav2_amcl) over /scan",
+    "tf_source": "diff_drive_bridge",
+    "uncertainty": {
+     "kind": "covariance_trace",
+     "converged_below": 0.25
+    }
+   },
+   "mission_driver": "nav2",
+   "world_to_map": {
+    "x": 0.5,
+    "y": 0.5,
+    "yaw": 0.0
+   },
+   "world_to_map_source": "/ws/ros2_ws/install/ral_bringup/share/ral_bringup/maps/apartment_frames.yaml",
+   "world_to_ekf_local": null,
+   "map_sha256": "47d1e2ad01a41a52f4a866918fe46c7d32246a8fa393b809125391d95fd48c0b",
+   "mission_result_source": "/navigate_to_pose/_action/status",
+   "pair_counts": {
+    "est_error": 105,
+    "est_error_at_start_pose": 23,
+    "cmd_vs_achieved": 380
+   },
+   "missing_topics": [],
+   "topic_status": {
+    "/ground_truth/odom": "read",
+    "/mission_state": "read",
+    "/fault_events": "read",
+    "/scan": "read",
+    "/scan_raw": "read",
+    "/bumper": "read",
+    "/map": "read",
+    "/amcl_pose": "read",
+    "/cmd_vel": "read",
+    "/initialpose": "read",
+    "/plan": "read",
+    "/navigate_to_pose/_action/status": "read",
+    "/navigate_to_pose/_action/feedback": "read"
+   },
+   "plan_detection_resolution_s": 1.0,
+   "plan_detection_resolution_source": "nav2_bt_navigator navigate_to_pose_w_replanning_and_recovery.xml: ComputePathToPose is wrapped in <RateController hz=\"1.0\">",
+   "metrics_version": 5
+  },
+  "interventions": [],
+  "preflight": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (10.000, 6.000), grid cell (210, 131) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "preflight_initial": {
+   "ok": true,
+   "outcome": "",
+   "detail": "41 cell(s) within 0.18 m of the goal at map (0.000, 0.000), grid cell (10, 11) of 241x162 at 0.05000000074505806 m: 0 unknown (allowed, planner allow_unknown is true), 0 occupied (>= 65), 0 outside; the goal centre cell is inside the grid with value 0",
+   "robot_radius_m": 0.18,
+   "robot_radius_sources": {
+    "robot_profile": "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
+   },
+   "occupied_thresh": 65
+  },
+  "bumper_liveness": {
+   "ros_publishers": [
+    "ros_gz_bridge"
+   ],
+   "gz_topic": "/world/ral_apartment/model/ral_roomba/link/base_link/sensor/bumper/contact",
+   "gz_topic_present": true,
+   "gz_detail": "listed by gz topic -l",
+   "alive": true
+  },
+  "bag": [
+   [
+    "/faults/active",
+    "ral_interfaces/msg/ActiveFaults",
+    1
+   ],
+   [
+    "/map",
+    "nav_msgs/msg/OccupancyGrid",
+    1
+   ],
+   [
+    "/plan",
+    "nav_msgs/msg/Path",
+    38
+   ],
+   [
+    "/scan",
+    "sensor_msgs/msg/LaserScan",
+    578
+   ],
+   [
+    "/scan_raw",
+    "sensor_msgs/msg/LaserScan",
+    579
+   ],
+   [
+    "/tf_static",
+    "tf2_msgs/msg/TFMessage",
+    2
+   ],
+   [
+    "/bumper",
+    "ros_gz_interfaces/msg/Contacts",
+    0
+   ],
+   [
+    "/ground_truth/odom",
+    "nav_msgs/msg/Odometry",
+    2895
+   ],
+   [
+    "/tf",
+    "tf2_msgs/msg/TFMessage",
+    4618
+   ],
+   [
+    "/clock",
+    "rosgraph_msgs/msg/Clock",
+    28951
+   ],
+   [
+    "/initialpose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    3
+   ],
+   [
+    "/navigate_to_pose/_action/status",
+    "action_msgs/msg/GoalStatusArray",
+    2
+   ],
+   [
+    "/navigate_to_pose/_action/feedback",
+    "nav2_msgs/action/NavigateToPose_FeedbackMessage",
+    3817
+   ],
+   [
+    "/joint_states",
+    "sensor_msgs/msg/JointState",
+    28948
+   ],
+   [
+    "/cmd_vel",
+    "geometry_msgs/msg/Twist",
+    1006
+   ],
+   [
+    "/fault_events",
+    "ral_interfaces/msg/FaultEvent",
+    0
+   ],
+   [
+    "/mission_state",
+    "ral_interfaces/msg/MissionState",
+    4
+   ],
+   [
+    "/amcl_pose",
+    "geometry_msgs/msg/PoseWithCovarianceStamped",
+    133
+   ],
+   [
+    "/odom",
+    "nav_msgs/msg/Odometry",
+    2894
+   ],
+   [
+    "/rosout",
+    "rcl_interfaces/msg/Log",
+    203
+   ]
+  ],
+  "bag_duration_s": 57.904,
+  "scenario_yaml": "# Copyright 2026 Resilient Autonomy Lab\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#     http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n#\n# The Phase 2 mission, run through the Phase 3 harness: the same start, the\n# same goal in room 3, reachable from room 2 only through wall B's 0.70 m\n# doorway. Deliberately identical so this run's numbers are comparable with\n# docs/nav-closed-loop.md, which measured the same mission by hand.\n#\n# initial_pose and goal are in the gz WORLD frame, which is the frame the\n# world SDF, the spawn pose and ground truth are all expressed in. The runner\n# converts them to `map` with the measured world_to_map alignment before\n# publishing /initialpose or sending NavigateToPose, and records BOTH forms in\n# run.json so a reader can tell which frame a number is in.\n#\n# `seed` seeds ral_faults' RNG (Phase 4.2's scan noise and dropout) and\n# nothing else. AMCL is not seedable; see docs/repeatability.md.\n\nexperiment_id: baseline_roomba\nrobot: roomba\nworld: ral_apartment\nseed: 1\ninitial_pose: {x: 0.5, y: 0.5, yaw: 0.0}\ngoal: {x: 10.5, y: 6.5, yaw: 1.57}\ntimeout_sec: 180\ninterventions: []\n",
+  "log_tail": " sending signal 'SIGTERM' to process[component_container_isolated-10]\n[component_container_isolated-10] [INFO] [1792935452.828137583] [rclcpp]: signal_handler(SIGINT/SIGTERM)\n[ERROR] [component_container_isolated-10]: process[component_container_isolated-10] failed to terminate '10.0' seconds after receiving 'SIGTERM', escalating to 'SIGKILL'\n[INFO] [component_container_isolated-10]: sending signal 'SIGKILL' to process[component_container_isolated-10]\n[ERROR] [component_container_isolated-10]: process has died [pid 263, exit code -9, cmd '/opt/ros/humble/lib/rclcpp_components/component_container_isolated --ros-args --log-level info --ros-args -r __node:=nav2_container --params-file /tmp/launch_params__1vg_x1a --params-file /tmp/launch_params_q43e65nm -r /tf:=tf -r /tf_static:=tf_static'].\n",
+  "bag_record_log_tail": "1792935389.225108206] [rosbag2_recorder]: Overriding subscription profile for /map\n[INFO] [1792935389.226895291] [rosbag2_recorder]: Subscribed to topic '/map'\n[INFO] [1792935389.230383491] [rosbag2_recorder]: Subscribed to topic '/plan'\n[INFO] [1792935390.078203266] [rosbag2_recorder]: Overriding subscription profile for /faults/active\n[INFO] [1792935390.080901563] [rosbag2_recorder]: Subscribed to topic '/faults/active'\n[INFO] [1792935390.081084238] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...\n[INFO] [1792935447.175043185] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while\n[INFO] [1792935447.183995793] [rosbag2_recorder]: Event publisher thread: Exiting\n[INFO] [1792935447.184242992] [rosbag2_recorder]: Recording stopped\n",
+  "has_plot": false,
+  "rtf_samples": "0.99999550002025, 0.99874358057563584, 1.0014480939438428",
+  "goal_map": [
+   10.0,
+   6.0,
+   1.57
+  ],
+  "goal_world": [
+   10.5,
+   6.5,
+   1.57
+  ],
+  "initial_map": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "initial_world": [
+   0.5,
+   0.5,
+   0.0
+  ]
+ }
+}

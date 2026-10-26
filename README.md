@@ -118,6 +118,7 @@ Use established robotics software and platform-appropriate protocols where they 
 ## Repository guidance
 
 - [`ENGINEERING.md`](ENGINEERING.md) — Non-negotiable realism, integration, observability, and validation standards.
+- [`DASHBOARD_UI_SPEC.md`](DASHBOARD_UI_SPEC.md) — Requirements and constraints for the operator dashboard (Phase 6): the data contract, provenance rules, panels, states and acceptance checks. The visual design is produced against it outside this repository.
 - [`CLAUDE.md`](CLAUDE.md) — Working instructions for the coding agent; the agent must preserve this project's intent and the engineering standards.
 
 **Status:** Two robots are integrated and measured, each under its own autonomy
@@ -163,3 +164,27 @@ baselines belong to.
 
 Of the five faults, the car supports four; `scan_degradation` is REFUSED for it
 with a stated reason, because nothing in its stack consumes the lidar.
+
+The **operator dashboard** is live. `scripts/dashboard.sh` starts a long-lived
+gateway (`ros2 run ral_eval dashboard_api`) inside the container and serves the
+console at <http://localhost:8771>. From the browser an operator starts and
+stops the stack for either robot, watches bring-up topic by topic, sets a goal
+in the gz world frame, runs a mission, injects any fault the selected robot
+supports, and reads the terminal outcome — then switches to the Run Inspector
+for the committed evidence under `runs/`.
+
+Three properties are structural rather than stylistic. A browser mission is
+driven through the **same** `MissionNode` and `MissionDriver` a measured run
+uses, so it takes the identical path and ends with the identical vocabulary; it
+deliberately writes **no run directory**, because `runs/` is the record of
+`run_scenario` output and the console says so. The browser link is labelled
+**"dashboard link"** everywhere and is JSON over SSE + POST, not a robotics
+protocol. And `scripts/dashboard.sh` takes the same `flock` on
+`/tmp/ral-run-$ROS_DOMAIN_ID.lock` that `scripts/run_scenario.sh` does, so a
+scenario run and the dashboard can never drive one domain.
+
+The browser half lives in `dashboard/` (React + Vite, fonts bundled, no CDN).
+Build it with `cd dashboard && npm install && npm run build`; the gateway serves
+`dist/` and says so when it is absent. `VITE_RAL_SOURCE=mock npm run dev` runs
+the console against a recorded fixture with no container and no stack, badged
+`MOCK`.

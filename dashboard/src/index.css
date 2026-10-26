@@ -1,0 +1,14 @@
+html, body {
+  margin: 0;
+  background: #181818;
+  color: #e6e6e6;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+a { color: #8fd0ff; text-decoration: none; }
+a:hover { color: #c4e7ff; text-decoration: underline; }
+button { font-family: inherit; }
+input, select { font-family: 'IBM Plex Mono', monospace; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #3a3a3a; }
+::-webkit-scrollbar-track { background: transparent; }
