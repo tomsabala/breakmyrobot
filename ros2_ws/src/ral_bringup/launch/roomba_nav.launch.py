@@ -197,7 +197,10 @@ def generate_launch_description() -> LaunchDescription:
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(bringup_share, 'launch', 'faults.launch.py')),
-            launch_arguments={'world': world, 'robot': robot, 'seed': seed}.items()),
+            # `map` goes through so the fault manager pre-flights a reposition
+            # against the same grid this stack is scored in.
+            launch_arguments={'world': world, 'robot': robot, 'seed': seed,
+                              'map': LaunchConfiguration('map')}.items()),
 
         # Nav2 activates its costmaps as soon as it starts, and a costmap asks
         # for odom -> base_link at the LATEST available time. Starting it

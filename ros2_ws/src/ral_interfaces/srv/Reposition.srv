@@ -1,0 +1,56 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# OPERATOR REPOSITION, not a kidnap. The operator moves the body deliberately
+# to set up the next run, and the robot is told where it went WHERE THE
+# PLATFORM ALLOWS IT. That is the whole difference from Kidnap.srv, which is
+# an unannounced teleport whose point is that the estimator must recover.
+#
+# Served as /faults/reposition by ral_faults/fault_manager.py. Injection
+# point: /world/<world>/set_pose (gz entity pose) - the same gz boundary the
+# kidnap uses, because moving a body in gz has exactly one boundary.
+#
+# `new_pose` is in the gz WORLD frame, like every other gz entity pose, and is
+# NOT converted through world_to_map.
+#
+# `new_pose.position.z` is IGNORED and replaced by the manager's kidnap_z
+# (the robot's spawn height from its profile), for the same reason Kidnap.srv
+# states: the pose carries x/y/yaw only and z = 0 drops the wheels through the
+# floor. Linear and angular velocity are NOT zeroed either, so the body keeps
+# the twist it had.
+#
+# THREE THINGS SEPARATE THIS FROM A KIDNAP, and the manager reports all three:
+#
+#   1. The destination is PRE-FLIGHTED against the committed map with the
+#      robot's own footprint. A destination inside a wall is refused and the
+#      body does not move. `kidnap` is deliberately unchecked - teleporting
+#      into geometry is a legitimate thing to inflict on a localizer.
+#   2. The estimator is reseeded only ON A PLATFORM THAT EXPOSES A SEED. For
+#      a velocity_twist platform (the Roomba, running AMCL) the manager
+#      publishes /initialpose. ArduPilot's EKF3 has no equivalent, so on the
+#      car NOTHING is reseeded and the estimate diverges by the teleport
+#      distance until GPS pulls it back.
+#   3. The `activated` detail states `estimate_reseeded: true|false` with the
+#      reason, so the timeline shows whether the robot's belief moved with
+#      its body.
+#
+# `fault_id` works exactly as in Kidnap.srv: the join key for this instance,
+# empty meaning "allocate one".
+
+string fault_id
+geometry_msgs/Pose new_pose
+---
+string fault_id
+bool success
+string message

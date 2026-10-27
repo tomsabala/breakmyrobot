@@ -81,6 +81,7 @@ def test_the_fault_service_names_phase_4_must_bind_are_pinned():
         FaultEvent.KIND_SCAN_DEGRADATION: '/faults/set_scan_degradation',
         FaultEvent.KIND_MOBILITY_FAULT: '/faults/set_mobility_fault',
         FaultEvent.KIND_KIDNAP: '/faults/kidnap',
+        FaultEvent.KIND_REPOSITION: '/faults/reposition',
     }
 
 
@@ -100,6 +101,9 @@ def test_injection_point_matches_the_message_definition_table():
         == '/world/ral_apartment/wrench/persistent (gz physics)'
     assert run_scenario.injection_point(
         FaultEvent.KIND_KIDNAP, 'ral_apartment') \
+        == '/world/ral_apartment/set_pose (gz entity pose)'
+    assert run_scenario.injection_point(
+        FaultEvent.KIND_REPOSITION, 'ral_apartment') \
         == '/world/ral_apartment/set_pose (gz entity pose)'
 
 

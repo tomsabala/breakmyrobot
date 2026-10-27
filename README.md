@@ -216,8 +216,14 @@ planner itself then refused 9 replans from inside the doorway with "no
 feasible path for this body and turning radius". The doorway remains the
 limit; the vehicle still ends `mavros:stalled_no_progress` there.
 
-Of the five faults, the car supports four; `scan_degradation` is REFUSED for it
-with a stated reason, because nothing in its stack consumes the lidar.
+Of the six interventions, the car supports five; `scan_degradation` is REFUSED
+for it with a stated reason, because nothing in its stack consumes the lidar.
+The sixth, `reposition`, moves the body in the simulator deliberately and
+reports whether the robot's estimator could be reseeded to match: on the
+Roomba it publishes `/initialpose` and AMCL follows; on the car it reports
+`estimate_reseeded: false`, because EKF3 exposes no seeding interface over
+MAVROS, so truth and estimate disagree by the move distance until the
+autopilot's own measurements pull them back.
 
 The **operator dashboard** is live. `scripts/dashboard.sh` starts a long-lived
 gateway (`ros2 run ral_eval dashboard_api`) inside the container and serves the

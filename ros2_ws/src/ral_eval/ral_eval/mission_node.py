@@ -55,6 +55,8 @@ def injection_point(kind: str, world: str) -> str:
         FaultEvent.KIND_SCAN_DEGRADATION: 'scan_fault_relay (driver/transport level)',
         FaultEvent.KIND_MOBILITY_FAULT: f'/world/{world}/wrench/persistent (gz physics)',
         FaultEvent.KIND_KIDNAP: f'/world/{world}/set_pose (gz entity pose)',
+        # The same gz boundary as the kidnap: moving a body in gz has one.
+        FaultEvent.KIND_REPOSITION: f'/world/{world}/set_pose (gz entity pose)',
     }[kind]
 
 

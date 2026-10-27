@@ -169,6 +169,7 @@ from ral_interfaces.msg import FaultEvent, MissionState
 from ral_interfaces.srv import (
     ClearObstacle,
     Kidnap,
+    Reposition,
     SetMobilityFault,
     SetScanDegradation,
     SpawnObstacle,
@@ -507,6 +508,19 @@ def _kidnap_request(params: dict, fault_id: str) -> Kidnap.Request:
     return request
 
 
+def _reposition_request(params: dict, fault_id: str) -> Reposition.Request:
+    request = Reposition.Request()
+    request.fault_id = fault_id
+    request.new_pose.position.x = params['pose']['x']
+    request.new_pose.position.y = params['pose']['y']
+    qx, qy, qz, qw = quaternion_of_yaw(params['pose']['yaw'])
+    request.new_pose.orientation.x = qx
+    request.new_pose.orientation.y = qy
+    request.new_pose.orientation.z = qz
+    request.new_pose.orientation.w = qw
+    return request
+
+
 def _target_of(kind: str, params: dict, model: str) -> str:
     """
     Return the entity or stream a fault acts on, for FaultEvent.target.
@@ -532,6 +546,7 @@ DISPATCH = {
     FaultEvent.KIND_MOBILITY_FAULT: ('/faults/set_mobility_fault', SetMobilityFault,
                                      _mobility_request),
     FaultEvent.KIND_KIDNAP: ('/faults/kidnap', Kidnap, _kidnap_request),
+    FaultEvent.KIND_REPOSITION: ('/faults/reposition', Reposition, _reposition_request),
 }
 
 

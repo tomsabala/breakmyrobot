@@ -118,7 +118,8 @@ recorder_gate_topics:
   - /cmd_vel
   - /amcl_pose
 
-faults: [spawn_obstacle, clear_obstacle, scan_degradation, mobility_fault, kidnap]
+faults: [spawn_obstacle, clear_obstacle, scan_degradation, mobility_fault, kidnap,
+         reposition]
 
 estimator_label: AMCL
 

@@ -402,7 +402,10 @@ def generate_launch_description() -> LaunchDescription:
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(bringup_share, 'launch', 'faults.launch.py')),
-            launch_arguments={'world': world, 'robot': robot, 'seed': seed}.items()),
+            # `map` goes through so the fault manager pre-flights a reposition
+            # against the same grid this stack is scored in.
+            launch_arguments={'world': world, 'robot': robot, 'seed': seed,
+                              'map': LaunchConfiguration('map')}.items()),
 
         # SITL is started immediately and not behind a timer: ArduPilotPlugin
         # and the autopilot find each other through a UDP handshake that either

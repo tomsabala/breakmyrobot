@@ -62,6 +62,7 @@
 #   scan_degradation  scan_fault_relay (driver/transport level)
 #   mobility_fault    /world/ral_apartment/wrench/persistent (gz physics)
 #   kidnap            /world/ral_apartment/set_pose (gz entity pose)
+#   reposition        /world/ral_apartment/set_pose (gz entity pose)
 #
 # `target` is the entity or stream affected: the model name, the obstacle
 # name, or the topic (e.g. ral_roomba, blocker_1, /scan).
@@ -79,6 +80,7 @@ string KIND_CLEAR_OBSTACLE=clear_obstacle
 string KIND_SCAN_DEGRADATION=scan_degradation
 string KIND_MOBILITY_FAULT=mobility_fault
 string KIND_KIDNAP=kidnap
+string KIND_REPOSITION=reposition
 
 builtin_interfaces/Time stamp
 string id

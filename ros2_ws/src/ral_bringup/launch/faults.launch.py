@@ -60,6 +60,7 @@ def generate_launch_description() -> LaunchDescription:
     world = LaunchConfiguration('world')
     robot = LaunchConfiguration('robot')
     seed = LaunchConfiguration('seed')
+    map_yaml = LaunchConfiguration('map')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -74,6 +75,12 @@ def generate_launch_description() -> LaunchDescription:
             'seed', default_value='1',
             description="The scenario's seed. Governs scan_fault_relay's noise and "
                         'dropout only; nav2_amcl exposes no seed.'),
+        DeclareLaunchArgument(
+            'map', default_value=os.path.join(bringup_share, 'maps', 'apartment.yaml'),
+            description='The committed map the reposition destination is pre-flighted '
+                        'against. Same default as both *_nav.launch.py files declare '
+                        'for their own `map` argument, so a stack pre-flights against '
+                        'the grid its mission is scored in.'),
 
         Node(
             package='ral_faults',
@@ -102,6 +109,7 @@ def generate_launch_description() -> LaunchDescription:
                 # where that directory is already known.
                 'profile_path': [os.path.join(bringup_share, 'config', 'robots', ''),
                                  robot, '.yaml'],
+                'map_yaml': map_yaml,
             }],
             output='screen'),
 

@@ -100,6 +100,7 @@ import math
 import re
 import time
 
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from ral_faults.catalogue import (
     check_params,
@@ -108,11 +109,18 @@ from ral_faults.catalogue import (
     target_for,
 )
 from ral_faults.lifecycle import FaultRegistry, mission_start_is_new
+from ral_eval import frames
 from ral_eval.robot_profile import load_profile, supports
+from ral_eval.run_scenario import (
+    occupancy_grid_from_pgm,
+    preflight_goal,
+    read_occupied_thresh,
+)
 from ral_interfaces.msg import ActiveFaults, FaultEvent, MissionState
 from ral_interfaces.srv import (
     ClearObstacle,
     Kidnap,
+    Reposition,
     SetMobilityFault,
     SetScanDegradation,
     SpawnObstacle,
@@ -180,6 +188,12 @@ class FaultManager(Node):
         self.declare_parameter('profile_path', '')
         self.declare_parameter('truth_topic', '/ground_truth/odom')
         self.declare_parameter('relay_service', '/scan_fault_relay/set_degradation')
+        # The committed map a REPOSITION destination is pre-flighted against.
+        # Supplied by faults.launch.py, which takes it from the stack's own
+        # `map` argument, so the check runs against the grid the mission is
+        # scored in. Empty means no pre-flight is possible, and reposition is
+        # refused rather than performed unchecked.
+        self.declare_parameter('map_yaml', '')
         # WALL seconds. These guard discovery and a gz reply, both of which
         # happen outside the simulation; a sim-time deadline would never fire
         # before /clock exists.
@@ -197,6 +211,7 @@ class FaultManager(Node):
         self.robot = self._string_param('robot')
         self.truth_topic = self._string_param('truth_topic')
         self.relay_service = self._string_param('relay_service')
+        self.map_yaml = self._string_param('map_yaml')
         self.service_wait_s = self.get_parameter(
             'service_wait_s').get_parameter_value().double_value
         self.reproject_rad = self.get_parameter(
@@ -223,6 +238,12 @@ class FaultManager(Node):
         self.model = self.profile['model']
         self.kidnap_z = float(self.profile['kidnap_z_m'])
         self.estimator = self.profile['estimator_label']
+        # The reposition pre-flight's inputs, built on FIRST USE and cached:
+        # reading a 241x162 PGM at start-up would add a failure mode to node
+        # start for a service that may never be called.
+        self._preflight_grid = None
+        self._preflight_wtm = None
+        self._preflight_thresh = None
 
         # One reentrant group for everything that can call out while serving:
         # see the module docstring.
@@ -245,6 +266,11 @@ class FaultManager(Node):
             EntityWrench, f'/world/{self.world}/wrench/persistent', 10)
         self.wrench_clear_pub = self.create_publisher(
             Entity, f'/world/{self.world}/wrench/clear', 10)
+        # The estimator seed, published ONLY after a successful reposition and
+        # ONLY on a platform that has one. The QoS matches what AMCL
+        # subscribes with (and what MissionNode.publish_initial_pose uses).
+        self.initialpose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', 10)
 
         self.create_subscription(Odometry, self.truth_topic, self._on_truth, 10,
                                  callback_group=group)
@@ -272,6 +298,8 @@ class FaultManager(Node):
         self.create_service(SetMobilityFault, '/faults/set_mobility_fault',
                             self._on_set_mobility_fault, callback_group=group)
         self.create_service(Kidnap, '/faults/kidnap', self._on_kidnap,
+                            callback_group=group)
+        self.create_service(Reposition, '/faults/reposition', self._on_reposition,
                             callback_group=group)
         self.create_service(Trigger, '/faults/clear_all', self._on_clear_all,
                             callback_group=group)
@@ -894,6 +922,165 @@ class FaultManager(Node):
         response.success = True
         response.message = detail
         return response
+
+    def _on_reposition(self, request, response):
+        with self.registry.lock:
+            return self._reposition(request, response)
+
+    def _reposition(self, request, response):
+        """
+        Move the body deliberately, with the destination checked.
+
+        Three things separate this from `_kidnap`, and all three are reported
+        in the `activated` detail: the destination is pre-flighted against the
+        committed map with this robot's own footprint; the twist is NOT zeroed
+        (identical to the kidnap); and the estimator is reseeded only where
+        the platform exposes a seed.
+        """
+        kind = FaultEvent.KIND_REPOSITION
+        fault_id = self.registry.mint_id(kind, request.fault_id)
+        target = target_for(self.catalogue, kind, {}, self.model)
+        self._event(
+            fault_id, kind, target, FaultEvent.STATE_REQUESTED,
+            f'reposition {self.model} to world ({request.new_pose.position.x:.3f}, '
+            f'{request.new_pose.position.y:.3f})')
+
+        refusal = self._gate(kind)
+        if refusal:
+            return self._reject(response, fault_id, kind, target, refusal)
+
+        orientation = request.new_pose.orientation
+        refusal = check_params(self.catalogue, kind, {
+            'new_pose.position.x': request.new_pose.position.x,
+            'new_pose.position.y': request.new_pose.position.y,
+            'new_pose.orientation.x': orientation.x,
+            'new_pose.orientation.y': orientation.y,
+            'new_pose.orientation.z': orientation.z,
+            'new_pose.orientation.w': orientation.w})
+        if refusal:
+            return self._reject(response, fault_id, kind, target, refusal)
+
+        yaw = yaw_of_quaternion(orientation)
+        ok, preflight_detail = self._preflight_destination(
+            request.new_pose.position.x, request.new_pose.position.y, yaw)
+        if not ok:
+            # The body has NOT moved: the check runs before the gz call.
+            return self._reject(response, fault_id, kind, target, preflight_detail)
+
+        gz_request = SetEntityPose.Request()
+        gz_request.entity.name = self.model
+        gz_request.entity.type = Entity.MODEL
+        # Field by field, for the same reason as the kidnap: assigning the
+        # message would alias the caller's request, and the z substitution
+        # below would rewrite the record of what was asked.
+        gz_request.pose.position.x = request.new_pose.position.x
+        gz_request.pose.position.y = request.new_pose.position.y
+        gz_request.pose.orientation.x = orientation.x
+        gz_request.pose.orientation.y = orientation.y
+        gz_request.pose.orientation.z = orientation.z
+        gz_request.pose.orientation.w = orientation.w
+        gz_request.pose.position.z = self.kidnap_z
+
+        ok, reason, gz_response = self._call(
+            self.pose_client, gz_request, f'/world/{self.world}/set_pose')
+        if not ok:
+            return self._reject(response, fault_id, kind, target, reason)
+        if not gz_response.success:
+            return self._reject(
+                response, fault_id, kind, target,
+                f'/world/{self.world}/set_pose returned success=false for '
+                f'{self.model!r}; the body did not move')
+
+        reseeded, reseed_detail = self._reseed_estimator(
+            gz_request.pose.position.x, gz_request.pose.position.y, orientation)
+        note = kind_entry(self.catalogue, kind)['honesty_note']
+        detail = (f'gz moved {self.model} to world ({gz_request.pose.position.x:.3f}, '
+                  f'{gz_request.pose.position.y:.3f}, z={self.kidnap_z:.3f} substituted '
+                  f'by the manager), yaw {yaw:.3f}. '
+                  f'estimate_reseeded: {str(reseeded).lower()} - {reseed_detail} '
+                  f'Destination pre-flight: {preflight_detail} {note}')
+        self._event(fault_id, kind, target, FaultEvent.STATE_ACTIVATED, detail)
+        # A one-shot, exactly as the kidnap: the world changed once, there is
+        # no state to hold and nothing to clear.
+        response.fault_id = fault_id
+        response.success = True
+        response.message = detail
+        return response
+
+    def _preflight_destination(self, x: float, y: float, yaw: float):
+        """
+        (ok, detail) for a world-frame destination, from the committed map.
+
+        The same check `run_scenario` applies to a scenario's start pose and
+        goal, with this robot's own footprint - so a rectangular body is
+        sampled as the rectangle it is at the yaw it is being placed at.
+        """
+        if not self.map_yaml:
+            return False, ('no `map_yaml` parameter was supplied, so the destination '
+                           'cannot be checked against the map; the manager refuses to '
+                           'move the body unchecked')
+        try:
+            if self._preflight_grid is None:
+                self._preflight_wtm = frames.load_alignment_for_map(self.map_yaml)
+                self._preflight_grid = occupancy_grid_from_pgm(self.map_yaml)
+                self._preflight_thresh = read_occupied_thresh(self.map_yaml)
+        except Exception as exc:                 # noqa: BLE001 - reported verbatim
+            self._preflight_grid = None
+            return False, (f'the destination could not be checked: {self.map_yaml} '
+                           f'was rejected ({exc})')
+        pose_map = frames.world_pose_to_map(x, y, yaw, self._preflight_wtm)
+        verdict = preflight_goal(self._preflight_grid, pose_map,
+                                 float(self.profile['footprint']['radius_m']),
+                                 self._preflight_thresh,
+                                 footprint=self.profile['footprint'])
+        if not verdict['ok']:
+            return False, (f'the destination is not free for this body '
+                           f'({verdict["outcome"]}): {verdict["detail"]}')
+        return True, verdict['detail']
+
+    def _reseed_estimator(self, x: float, y: float, orientation):
+        """
+        (reseeded, detail) - publish /initialpose where the platform has one.
+
+        A velocity_twist platform runs AMCL, which takes a seed on
+        /initialpose. Everything else does not: ArduPilot's EKF3 has no
+        seeding interface at all, so the estimate stays where it was and
+        diverges by the teleport distance. Nothing is faked for it; the caller
+        is told which happened.
+        """
+        if self.profile['command']['kind'] != 'velocity_twist':
+            return False, (
+                f'{self.estimator} exposes no seeding interface on this platform '
+                f"(command.kind is {self.profile['command']['kind']!r}, not "
+                "'velocity_twist'), so nothing was published and the estimate stays "
+                'where it was: it now disagrees with truth by the move distance until '
+                'its own measurements pull it back.')
+        message = PoseWithCovarianceStamped()
+        message.header.frame_id = 'map'
+        pose_map = frames.world_pose_to_map(
+            x, y, yaw_of_quaternion(orientation), self._preflight_wtm)
+        message.pose.pose.position.x = pose_map[0]
+        message.pose.pose.position.y = pose_map[1]
+        qz = math.sin(pose_map[2] / 2.0)
+        qw = math.cos(pose_map[2] / 2.0)
+        message.pose.pose.orientation.z = qz
+        message.pose.pose.orientation.w = qw
+        # The same constants MissionNode.publish_initial_pose uses: 0.5 m
+        # standard deviation in x and y, 0.25 rad in yaw.
+        message.pose.covariance[0] = 0.25
+        message.pose.covariance[7] = 0.25
+        message.pose.covariance[35] = 0.06853891945200942
+        # THREE publications: Nav2Driver.prepare establishes that one is not
+        # reliably taken (AMCL may not yet be subscribed). WALL seconds - this
+        # is discovery, not simulation.
+        for index in range(3):
+            if index:
+                time.sleep(0.5)
+            message.header.stamp = self.get_clock().now().to_msg()
+            self.initialpose_pub.publish(message)
+        return True, (f'/initialpose published 3x (0.5 s apart) at map '
+                      f'({pose_map[0]:.3f}, {pose_map[1]:.3f}, {pose_map[2]:.3f}), so '
+                      f'{self.estimator} was told where the body went.')
 
     def _on_clear_all(self, request, response):
         with self.registry.lock:

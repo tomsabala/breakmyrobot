@@ -16,6 +16,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   srv/SetScanDegradation.srv
   srv/SetMobilityFault.srv
   srv/Kidnap.srv
+  srv/Reposition.srv
   srv/StartMission.srv
   DEPENDENCIES builtin_interfaces geometry_msgs
 )

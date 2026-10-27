@@ -157,3 +157,35 @@ faults:
     # and a teleport outside the apartment is a visible, reportable result.
     # check_params still refuses NaN and infinity.
     param_ranges: {}
+
+  # An OPERATOR INTERVENTION rather than a fault, catalogued here because this
+  # file is the single vocabulary: /fault_events and run.json.interventions are
+  # the only provenance channels that exist, and an intervention outside them
+  # would be a body movement with no record. `category: state` because it is
+  # the truth pose that changes; the field's closed set is
+  # environment|dynamics|state|perception, so there is no `operator` to use.
+  reposition:
+    category: state
+    service: /faults/reposition
+    srv_type: ral_interfaces/srv/Reposition
+    injection_point: "/world/{world}/set_pose (gz entity pose)"
+    target_rule: model
+    lifetime: oneshot
+    cleared_by: null
+    alters_truth: true
+    honesty_note: >-
+      Moves the body deliberately, and differs from `kidnap` in exactly three
+      ways. (1) The destination is pre-flighted against the committed map with
+      the robot's own footprint and REFUSED if the body would stand in
+      geometry; `kidnap` is deliberately unchecked. (2) Linear and angular
+      velocity are NOT zeroed, so the body keeps the twist it had, and z is set
+      by the manager (the pose carries x/y/yaw only). (3) The estimator is
+      reseeded only on a platform that exposes a seed: the Roomba's AMCL is
+      reseeded through /initialpose, while ArduPilot's EKF3 is not seedable, so
+      on the car nothing is reseeded and the estimate diverges by the teleport
+      distance until GPS pulls it back. Every event says which of the two
+      happened as `estimate_reseeded: true|false`.
+    # No bounds, for the same reason as kidnap: the world has no declared
+    # extent. check_params still refuses NaN and infinity, and the map
+    # pre-flight above is the real check.
+    param_ranges: {}

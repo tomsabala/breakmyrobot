@@ -321,7 +321,7 @@ recorder_gate_topics:
   - /frame_alignment
   - /mavros/local_position/odom
 
-faults: [spawn_obstacle, clear_obstacle, mobility_fault, kidnap]
+faults: [spawn_obstacle, clear_obstacle, mobility_fault, kidnap, reposition]
 
 unsupported:
   scan_degradation: "ArduRover's navigation does not consume the lidar; degrading it has no effect on this platform."

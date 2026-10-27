@@ -64,6 +64,10 @@ INTERVENTION_PARAMS = {
     'mobility_fault': {'enabled': bool, 'force_x_n': float, 'force_y_n': float,
                        'torque_z_nm': float},
     'kidnap': {'pose': dict},
+    # Same pose shape as kidnap; what differs is the manager's handling, not
+    # the request (the destination is pre-flighted and the estimator reseeded
+    # where the platform allows it).
+    'reposition': {'pose': dict},
 }
 
 # Physically meaningful bounds for the numeric fault parameters, as
