@@ -227,11 +227,13 @@ autopilot's own measurements pull them back.
 
 The **operator dashboard** is live. `scripts/dashboard.sh` starts a long-lived
 gateway (`ros2 run ral_eval dashboard_api`) inside the container and serves the
-console at <http://localhost:8771>. From the browser an operator starts and
-stops the stack for either robot, watches bring-up topic by topic, sets a goal
-in the gz world frame, runs a mission, injects any fault the selected robot
-supports, and reads the terminal outcome — then switches to the Run Inspector
-for the committed evidence under `runs/`.
+console at <http://localhost:8771>. From the browser an operator picks the
+start pose on the map before bring-up, starts and stops the stack for either
+robot (including force-stopping one that crashed or was orphaned), watches
+bring-up topic by topic, zooms and pans the map, sets a goal in the gz world
+frame, runs a mission, injects any fault the selected robot supports —
+including repositioning the body mid-mission — and reads the terminal outcome,
+then switches to the Run Inspector for the evidence under `runs/`.
 
 **The Roomba's Nav2 now starts on a measured condition, not a timer.**
 `roomba_nav.launch.py` used to wait a fixed 11.5 s wall before including

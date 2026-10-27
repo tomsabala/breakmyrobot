@@ -8,7 +8,34 @@ export interface Layers {
   plan: boolean; est: boolean; truth: boolean; foot: boolean; world: boolean;
 }
 
-export interface View { x0: number; y1: number; s: number; ox: number; oy: number }
+export interface View {
+  x0: number; y1: number; s: number; ox: number; oy: number;
+  /** The un-zoomed fit-to-extent scale, so the input helpers can recover it. */
+  fit: number;
+}
+
+/** Operator view control. Pan is stored in MAP METRES, not pixels, so the view
+ *  survives a canvas resize (toggling the fault drawer changes the width). */
+export interface Camera {
+  /** Multiplier on the fit-to-extent scale. 1 = the whole map is visible. */
+  zoom: number;
+  /** Map-frame point rendered at the viewport centre; null = extent centre. */
+  cx: number | null;
+  cy: number | null;
+}
+
+export const DEFAULT_CAMERA: Camera = { zoom: 1, cx: null, cy: null };
+export const MIN_ZOOM = 0.5;
+export const MAX_ZOOM = 16;
+
+/** The body as the profile declares it, for every text that used to say "r". */
+export function footprintLabel(profile: RobotProfile): string {
+  const fp = profile.footprint;
+  if (fp.shape === 'rectangle' && fp.length_m && fp.width_m) {
+    return `${fp.length_m.toFixed(2)} × ${fp.width_m.toFixed(2)} m`;
+  }
+  return `r ${fp.radius_m} m`;
+}
 
 export interface DraftBox { name: string; x: number; y: number; sx: number; sy: number }
 export interface DraftPose { x: number; y: number; yaw: number }
@@ -22,9 +49,14 @@ export interface DrawInput {
   draftBox: DraftBox | null;
   draftKidnap: DraftPose | null;
   draftGoal: DraftPose | null;
+  /** The spawn pose a stack WOULD be launched at (world frame). */
+  draftStart: DraftPose | null;
+  /** The destination a live reposition WOULD move the body to. */
+  draftRepos: DraftPose | null;
   armed: { slot: string; kind: string; params: Record<string, unknown> }[];
   linkUp: boolean;
   goalToleranceM: number;
+  camera: Camera;
 }
 
 /** Cache of decoded occupancy grids, keyed by the base64 payload itself. */
@@ -103,7 +135,7 @@ function extent(reference: Reference) {
 export function drawMap(canvas: HTMLCanvasElement, input: DrawInput): View | null {
   const {
     state, reference, profile, layers, selectedObstacle, draftBox, draftKidnap,
-    draftGoal, armed, linkUp, goalToleranceM,
+    draftGoal, draftStart, draftRepos, armed, linkUp, goalToleranceM,
   } = input;
   const box = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -120,10 +152,13 @@ export function drawMap(canvas: HTMLCanvasElement, input: DrawInput): View | nul
 
   const { x0, x1, y0, y1 } = extent(reference);
   const pad = 24;
-  const s = Math.min((W - 2 * pad) / (x1 - x0), (H - 2 * pad) / (y1 - y0));
-  const ox = (W - (x1 - x0) * s) / 2;
-  const oy = (H - (y1 - y0) * s) / 2;
-  const view: View = { x0, y1, s, ox, oy };
+  const fit = Math.min((W - 2 * pad) / (x1 - x0), (H - 2 * pad) / (y1 - y0));
+  const s = fit * input.camera.zoom;
+  const cx = input.camera.cx ?? (x0 + x1) / 2;
+  const cy = input.camera.cy ?? (y0 + y1) / 2;
+  const ox = W / 2 - (cx - x0) * s;
+  const oy = H / 2 - (y1 - cy) * s;
+  const view: View = { x0, y1, s, ox, oy, fit };
   const X = (v: number) => ox + (v - x0) * s;
   const Y = (v: number) => oy + (y1 - v) * s;
 
@@ -178,12 +213,23 @@ export function drawMap(canvas: HTMLCanvasElement, input: DrawInput): View | nul
       grid.width * grid.resolution * s, grid.height * grid.resolution * s);
   }
 
-  // axes, in map metres
+  // axes, in map metres. The ticks follow the VISIBLE range and the labels are
+  // anchored to the viewport edges: anchoring them in world space (as this did
+  // before the camera existed) puts every label off-screen once zoomed in.
+  const vx0 = x0 + (0 - ox) / s;
+  const vx1 = x0 + (W - ox) / s;
+  const vy1 = y1 - (0 - oy) / s;
+  const vy0 = y1 - (H - oy) / s;
+  const step = [0.5, 1, 2, 5, 10].find((candidate) => candidate * s >= 55) ?? 20;
   g.fillStyle = '#9a9a9a';
   g.textAlign = 'center';
-  for (let i = Math.ceil(x0); i <= Math.floor(x1); i += 1) g.fillText(String(i), X(i), Y(y0) + 13);
+  for (let i = Math.ceil(vx0 / step) * step; i <= vx1; i += step) {
+    g.fillText(i.toFixed(step < 1 ? 1 : 0), X(i), H - 5);
+  }
   g.textAlign = 'right';
-  for (let j = Math.ceil(y0); j <= Math.floor(y1); j += 1) g.fillText(String(j), X(x0) - 6, Y(j) + 3);
+  for (let j = Math.ceil(vy0 / step) * step; j <= vy1; j += step) {
+    g.fillText(j.toFixed(step < 1 ? 1 : 0), 26, Y(j) + 3);
+  }
   g.textAlign = 'left';
 
   const rect = (
@@ -266,6 +312,44 @@ export function drawMap(canvas: HTMLCanvasElement, input: DrawInput): View | nul
     g.stroke();
     g.fillStyle = C.draftText;
     g.fillText('kidnap draft · not sent', px + profile.footprint.radius_m * s + 4, py + 3);
+  }
+  // The two BODY drafts: a spawn pose and a reposition destination. Both are
+  // drawn with the robot's real footprint at the drafted yaw, because that
+  // rectangle is exactly what the pre-flight will sample - a circle here
+  // would promise a check that is not the one performed.
+  const bodyDraft = (draft: DraftPose, label: string) => {
+    const m = worldToMap(draft.x, draft.y, draft.yaw, wtm);
+    const px = X(m.x);
+    const py = Y(m.y);
+    const fp = profile.footprint;
+    g.strokeStyle = C.command;
+    g.lineWidth = 1.4;
+    g.setLineDash([5, 4]);
+    if (fp.shape === 'rectangle' && fp.length_m && fp.width_m) {
+      g.save();
+      g.translate(px, py);
+      g.rotate(-m.yaw);
+      g.strokeRect(-(fp.length_m / 2) * s, -(fp.width_m / 2) * s,
+        fp.length_m * s, fp.width_m * s);
+      g.restore();
+    } else {
+      g.beginPath();
+      g.arc(px, py, fp.radius_m * s, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.setLineDash([]);
+    g.beginPath();
+    g.moveTo(px, py);
+    g.lineTo(px + Math.cos(m.yaw) * 0.45 * s, py - Math.sin(m.yaw) * 0.45 * s);
+    g.stroke();
+    g.fillStyle = C.draftText;
+    g.fillText(label, px + fp.radius_m * s + 4, py + 3);
+  };
+  if (draftStart && Number.isFinite(draftStart.x) && Number.isFinite(draftStart.y)) {
+    bodyDraft(draftStart, 'spawn pose · stack not launched');
+  }
+  if (draftRepos && Number.isFinite(draftRepos.x) && Number.isFinite(draftRepos.y)) {
+    bodyDraft(draftRepos, 'reposition · not sent');
   }
 
   const estimate = estimateInMap(state);
@@ -366,19 +450,32 @@ export function drawMap(canvas: HTMLCanvasElement, input: DrawInput): View | nul
     g.closePath();
     g.fill();
     g.fillStyle = C.faultText;
-    g.fillText(`${k.id} ${k.t.toFixed(2)} s · trail break`, tx + 8, ty - 6);
+    g.fillText(`${k.id} ${k.t.toFixed(2)} s · ${k.kind} · trail break`, tx + 8, ty - 6);
   }
 
   const pose = (p: Pose2D, colour: string, dash: number[]) => {
     const px = X(p.x);
     const py = Y(p.y);
     if (layers.foot) {
+      const fp = profile.footprint;
       g.strokeStyle = colour;
       g.lineWidth = 1.2;
       g.setLineDash(dash);
-      g.beginPath();
-      g.arc(px, py, profile.footprint.radius_m * s, 0, Math.PI * 2);
-      g.stroke();
+      if (fp.shape === 'rectangle' && fp.length_m && fp.width_m) {
+        // The SDF box is centred on base_link's origin in x and y, so the
+        // rectangle is centred on the pose. Screen y is flipped, so the yaw
+        // is negated.
+        g.save();
+        g.translate(px, py);
+        g.rotate(-p.yaw);
+        g.strokeRect(-(fp.length_m / 2) * s, -(fp.width_m / 2) * s,
+          fp.length_m * s, fp.width_m * s);
+        g.restore();
+      } else {
+        g.beginPath();
+        g.arc(px, py, fp.radius_m * s, 0, Math.PI * 2);
+        g.stroke();
+      }
       g.setLineDash([]);
     }
     g.strokeStyle = colour;
@@ -411,8 +508,10 @@ export function drawMap(canvas: HTMLCanvasElement, input: DrawInput): View | nul
   }
   if (state.estimate && state.estimate.frame !== 'map' && !state.align) {
     g.fillStyle = '#cfe9ff';
+    // Screen-anchored: a world anchor leaves the viewport as soon as the
+    // operator zooms, and this notice must never be the thing that scrolls off.
     g.fillText('estimate not drawn: /frame_alignment not yet received '
-      + '(no implicit identity transform)', X(x0) + 6, Y(y1) - 8);
+      + '(no implicit identity transform)', 10, 16);
   }
 
   if (!linkUp) {
@@ -518,4 +617,36 @@ export function toMap(view: View, canvas: HTMLCanvasElement, clientX: number,
     y: view.y1 - (py - view.oy) / view.s,
     yaw: 0,
   };
+}
+
+/** Zoom about the cursor: the map point under (clientX, clientY) stays put. */
+export function zoomAt(camera: Camera, view: View, canvas: HTMLCanvasElement,
+  clientX: number, clientY: number, factor: number): Camera {
+  const box = canvas.getBoundingClientRect();
+  const m = toMap(view, canvas, clientX, clientY);
+  const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, camera.zoom * factor));
+  const s = view.fit * zoom;
+  return {
+    zoom,
+    cx: m.x - (clientX - box.left - box.width / 2) / s,
+    cy: m.y + (clientY - box.top - box.height / 2) / s,
+  };
+}
+
+/** Zoom about the viewport centre, for the keyboard shortcuts. */
+export function zoomBy(camera: Camera, view: View, canvas: HTMLCanvasElement,
+  factor: number): Camera {
+  const box = canvas.getBoundingClientRect();
+  return zoomAt(camera, view, canvas,
+    box.left + box.width / 2, box.top + box.height / 2, factor);
+}
+
+/** Drag-pan by a screen-pixel delta. The centre is recovered from the VIEW, so
+ *  a camera that still carries a null centre never leaks a null out. */
+export function panBy(camera: Camera, view: View, canvas: HTMLCanvasElement,
+  dxPx: number, dyPx: number): Camera {
+  const box = canvas.getBoundingClientRect();
+  const cx = view.x0 + (box.width / 2 - view.ox) / view.s;
+  const cy = view.y1 - (box.height / 2 - view.oy) / view.s;
+  return { zoom: camera.zoom, cx: cx - dxPx / view.s, cy: cy + dyPx / view.s };
 }

@@ -1,5 +1,6 @@
 import { C, F } from '../theme/tokens';
 import { CopyButton, Tip, f2 } from '../ui/primitives';
+import { footprintLabel } from './draw';
 import type { ConsoleCtx } from './context';
 
 const linkTab = {
@@ -261,7 +262,11 @@ function RobotPopover({ ctx }: { ctx: ConsoleCtx }) {
                     + `min turn ${p.plant.min_turn_radius_m} m`}
                 </span>
                 <span style={{ color: C.text4 }}>footprint</span>
-                <span style={{ fontFamily: F.mono }}>{`radius ${p.footprint.radius_m} m`}</span>
+                <span style={{ fontFamily: F.mono }}>
+                  {p.footprint.shape === 'rectangle'
+                    ? `${footprintLabel(p)} box · circumscribed r ${p.footprint.radius_m} m`
+                    : `radius ${p.footprint.radius_m} m`}
+                </span>
                 <span style={{ color: C.text4 }}>faults</span>
                 <span style={{ fontFamily: F.mono }}>
                   {unsupported.length
@@ -282,8 +287,16 @@ function RobotPopover({ ctx }: { ctx: ConsoleCtx }) {
                     type="button"
                     disabled={busy || stack?.mission_active}
                     onClick={() => {
-                      ctx.setStartRobot(name);
-                      ctx.stopStack();
+                      // `attached` means this IS the running robot, so the
+                      // button is a plain stop. Otherwise it must stop and
+                      // then start - issuing both at once left the start
+                      // refused by the running stack's own /clock.
+                      if (attached) {
+                        ctx.setStartRobot(name);
+                        ctx.stopStack();
+                      } else {
+                        ctx.stopThenStart(name);
+                      }
                     }}
                     style={{
                       justifySelf: 'start', background: 'transparent',

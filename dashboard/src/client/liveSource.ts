@@ -23,6 +23,14 @@ export function createLiveSource(): RalSource {
     stream.onopen = () => {
       linkUp = true;
       emit('link', { up: true, at_wall_ms: Date.now() });
+      // Reconcile against the GATEWAY, not against whatever `stack` frame was
+      // latched before the connection dropped: a stack can be stopped, crash
+      // or be adopted while the browser is away, and the latched frame would
+      // still describe the state it had then.
+      fetch('/api/stack')
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload) => { if (payload) emit('stack', payload); })
+        .catch(() => undefined);
     };
     stream.onmessage = (event) => {
       try {
@@ -85,12 +93,29 @@ export function createLiveSource(): RalSource {
         }
       };
     },
-    post<T>(path: string, body?: unknown) {
-      return json<T>(path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body ?? {}),
-      });
+    async post<T>(path: string, body?: unknown) {
+      // A stop that outlives the HTTP server's patience must surface as a
+      // FAILED lifecycle record, not as a request that stays pending for
+      // ever. 90 s covers the gateway's own worst case (a 15 s worker join
+      // plus the 20 s + 10 s kill ladder) with margin.
+      const abort = new AbortController();
+      const timer = window.setTimeout(() => abort.abort(), 90_000);
+      try {
+        return await json<T>(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body ?? {}),
+          signal: abort.signal,
+        });
+      } catch (error) {
+        if (abort.signal.aborted) {
+          throw new Error(`${path}: no answer from the gateway within 90 s; the stack `
+            + 'state in the header is the only truth until it answers');
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timer);
+      }
     },
     reference: () => json<Reference>('/api/reference'),
     runs: () => json<RunEntry[]>('/api/runs'),

@@ -86,27 +86,50 @@ export function useTips() {
   return { onTip, hideTip, layer };
 }
 
-/** Copy to the clipboard, saying so for 1.2 s. */
-export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
+/**
+ * Copy to the clipboard, saying so for 1.2 s - and saying when it FAILED.
+ *
+ * `navigator.clipboard` is undefined on a non-secure origin, and the
+ * dashboard is served over plain HTTP on a LAN address, so a silent no-op
+ * here would look exactly like a successful copy. `text` may be a function,
+ * for payloads worth fetching only when the operator asks.
+ */
+export function CopyButton({ text, label = 'Copy' }: {
+  text: string | (() => Promise<string>); label?: string;
+}) {
+  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [reason, setReason] = useState('');
   useEffect(() => {
-    if (!copied) return undefined;
-    const handle = window.setTimeout(() => setCopied(false), 1200);
+    if (status === 'idle') return undefined;
+    const handle = window.setTimeout(() => setStatus('idle'), status === 'copied'
+      ? 1200 : 6000);
     return () => window.clearTimeout(handle);
-  }, [copied]);
+  }, [status]);
   return (
     <button
       type="button"
+      data-tip={status === 'failed' ? reason : undefined}
       onClick={() => {
-        void navigator.clipboard?.writeText(text);
-        setCopied(true);
+        const run = async () => {
+          const payload = typeof text === 'function' ? await text() : text;
+          if (!navigator.clipboard) {
+            throw new Error('navigator.clipboard is unavailable: this page is not a '
+              + 'secure context (plain HTTP). Use the download link instead.');
+          }
+          await navigator.clipboard.writeText(payload);
+        };
+        run().then(() => setStatus('copied'))
+          .catch((error: unknown) => { setReason(String(error)); setStatus('failed'); });
       }}
       style={{
-        background: 'transparent', border: `1px solid ${C.lineBright}`, color: C.text2,
-        font: `10.5px ${F.sans}`, padding: '1px 8px', cursor: 'pointer',
+        background: 'transparent',
+        border: `1px solid ${status === 'failed' ? C.bad : C.lineBright}`,
+        color: status === 'failed' ? C.bad : C.text2,
+        font: `10.5px ${F.sans}`, padding: '1px 8px',
+        cursor: status === 'failed' ? 'help' : 'pointer',
       }}
     >
-      {copied ? 'Copied' : label}
+      {status === 'copied' ? 'Copied' : status === 'failed' ? 'Copy failed' : label}
     </button>
   );
 }

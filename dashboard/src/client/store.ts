@@ -17,6 +17,8 @@ export interface Obstacle {
 }
 export interface Kidnap {
   id: string; t: number; from: TrailPoint | null; to: TrailPoint;
+  /** Which teleport kind produced it: 'kidnap' or 'reposition'. */
+  kind: string;
 }
 export interface Gap { from: number; to: number }
 export interface Achieved { t: number; v: number }
@@ -478,7 +480,11 @@ function ingestFaultEvent(state: UiState, msg: FaultEventMsg) {
       if (state.obstacles[name].id === msg.id) delete state.obstacles[name];
     }
   }
-  if (msg.kind === 'kidnap' && msg.state === 'activated') {
+  // Both teleport kinds: the body is somewhere else without having travelled,
+  // so the trail BREAKS and the distance is excluded from path length. The
+  // marker says which kind it was; the break is the same either way.
+  if ((msg.kind === 'kidnap' || msg.kind === 'reposition')
+      && msg.state === 'activated') {
     const hit = KIDNAP_RE.exec(msg.detail);
     const from = state.truth
       ? worldToMap(state.truth.pose.x, state.truth.pose.y, 0, state.worldToMap)
@@ -486,7 +492,7 @@ function ingestFaultEvent(state: UiState, msg: FaultEventMsg) {
     if (hit) {
       const to = worldToMap(Number(hit[1]), Number(hit[2]), 0, state.worldToMap);
       state.kidnaps.push({
-        id: msg.id, t: msg.stamp_sim_s,
+        id: msg.id, t: msg.stamp_sim_s, kind: msg.kind,
         from: from ? { x: from.x, y: from.y } : null,
         to: { x: to.x, y: to.y },
       });

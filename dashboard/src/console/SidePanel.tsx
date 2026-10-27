@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { C, F, STATES_A, STATES_B } from '../theme/tokens';
 import { Chevron, CopyButton, Tip, Unavailable, f2, f3 } from '../ui/primitives';
 import { mapToWorld, worldToMap } from '../client/store';
-import { drawDivergence } from './draw';
+import { drawDivergence, footprintLabel } from './draw';
 import type { ConsoleCtx } from './context';
 
 /**
@@ -23,6 +23,9 @@ const OUTCOME_CAPTION: Record<string, string> = {
   'mavros:stalled_no_progress':
     'runner policy: a deterministic no-progress rule in the mission driver, not a '
     + 'decision the autopilot made',
+  'mavros:carrot_unreachable':
+    'runner policy: the planned path left no point outside the body\u2019s minimum '
+    + 'turning circle, so no setpoint was sent',
   'mavros:canceled_timeout': 'runner: timeout_sec reached and HOLD commanded',
   'runner:not_sent:goal_cell_occupied':
     'runner pre-flight refusal: the goal was never sent to the stack',
@@ -94,9 +97,19 @@ export function SidePanel({ ctx }: { ctx: ConsoleCtx }) {
   const ready = stack?.state === 'ready';
   const missionActive = Boolean(stack?.mission_active);
   const missionBusy = ctx.lifecycle?.status === 'pending';
+  // A reposition needs a destination the operator actually chose: the form
+  // starts empty, so "finite x and y" is exactly "something was picked".
+  const reposReady = [ctx.repos.x, ctx.repos.y, ctx.repos.yaw]
+    .every((value) => Number.isFinite(Number(value)) && value !== '');
   const startDisabledReason = !ready
-    ? `the stack is ${stack?.state ?? 'idle'}; a goal can only be sent to a stack that `
-      + 'is ready'
+    ? (stack?.state === 'crashed'
+      ? 'the stack process exited on its own; press Stop to clear the remains, then '
+        + 'start it again'
+      : stack?.state === 'orphaned'
+        ? 'a stack from a previous gateway is still running; press Stop to kill it '
+          + 'before starting another'
+        : `the stack is ${stack?.state ?? 'idle'}; a goal can only be sent to a stack `
+          + 'that is ready')
     : missionActive
       ? 'a mission is already running'
       : draftGoalMap === null
@@ -320,13 +333,18 @@ export function SidePanel({ ctx }: { ctx: ConsoleCtx }) {
               <span>
                 {stack?.spawn
                   ? `(${f2(stack.spawn.x)}, ${f2(stack.spawn.y)}, ${f2(stack.spawn.yaw)})`
-                  : `(${profile.spawn.x}, ${profile.spawn.y}, ${profile.spawn.yaw}) default`}
+                  : `(${ctx.start.x || '—'}, ${ctx.start.y || '—'}, ${ctx.start.yaw}) `
+                    + 'to be launched at'}
               </span>
               <span>
                 {(() => {
+                  // A running stack's spawn is what it WAS launched at; an idle
+                  // one shows the pose the operator has drafted for the launch.
                   const s = stack?.spawn ?? {
-                    x: profile.spawn.x, y: profile.spawn.y, yaw: profile.spawn.yaw,
+                    x: Number(ctx.start.x), y: Number(ctx.start.y),
+                    yaw: Number(ctx.start.yaw),
                   };
+                  if (![s.x, s.y, s.yaw].every(Number.isFinite)) return '—';
                   const m = worldToMap(s.x, s.y, s.yaw, reference.world_to_map);
                   return `(${f2(m.x)}, ${f2(m.y)}, ${f2(m.yaw)})`;
                 })()}
@@ -341,9 +359,61 @@ export function SidePanel({ ctx }: { ctx: ConsoleCtx }) {
             </div>
             <div style={{ font: `10.5px ${F.mono}`, color: C.text4 }}>
               {`world_to_map (${reference.world_to_map.x}, ${reference.world_to_map.y}, `
-                + `${reference.world_to_map.yaw}) · footprint ${profile.footprint.radius_m} m `
+                + `${reference.world_to_map.yaw}) · footprint ${footprintLabel(profile)} `
                 + `· ${profile.footprint.source}`}
             </div>
+
+            {(stack?.state ?? 'idle') === 'idle' ? (
+              <div style={{ display: 'grid', gap: 5 }}>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6,
+                  alignItems: 'end',
+                }}
+                >
+                  {([['x', 'start x · world m'], ['y', 'start y · world m'],
+                    ['yaw', 'start yaw · rad']] as const).map(([key, label]) => (
+                      <label key={key} style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                        <span style={{
+                          font: `10px ${F.mono}`, color: C.text4, overflow: 'hidden',
+                          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}
+                        >
+                          {label}
+                        </span>
+                        <input
+                          value={ctx.start[key]}
+                          onChange={(event) => {
+                            const { value } = event.target;
+                            ctx.setStart((f) => ({ ...f, [key]: value }));
+                          }}
+                          style={{
+                            background: C.ink, border: `1px solid ${C.lineMid}`,
+                            color: C.text, fontSize: 11.5, padding: '4px 5px',
+                            width: '100%',
+                          }}
+                        />
+                      </label>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => ctx.setPick(ctx.pick === 'start' ? null : 'start')}
+                    style={{
+                      background: ctx.pick === 'start' ? C.command : 'transparent',
+                      border: `1px dashed ${C.command}`,
+                      color: ctx.pick === 'start' ? C.ink : C.draftText,
+                      font: `500 11px ${F.sans}`, padding: '3px 9px', cursor: 'pointer',
+                    }}
+                  >
+                    {ctx.pick === 'start' ? 'Picking… click the map' : 'Pick on map (S)'}
+                  </button>
+                  <span style={{ font: `10px ${F.mono}`, color: C.text4 }}>
+                    consumed at launch · the gateway pre-flights it against the map
+                  </span>
+                </div>
+              </div>
+            ) : null}
 
             <div style={{
               display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 6,
@@ -433,18 +503,125 @@ export function SidePanel({ ctx }: { ctx: ConsoleCtx }) {
               ) : (
                 <button
                   type="button"
-                  disabled={missionBusy || missionActive}
-                  onClick={ctx.stopStack}
+                  // Stop is offered in EVERY non-idle state, including
+                  // `crashed` (clears the remains) and `orphaned` (kills a
+                  // previous gateway's tree). Only a stop already in flight
+                  // disables it; a running mission is handled by Force stop.
+                  disabled={stack.state === 'stopping' || missionBusy || missionActive}
+                  data-tip={stack.state === 'stopping'
+                    ? 'a stop is already in progress'
+                    : (missionActive
+                      ? 'a mission is running; use Force stop'
+                      : undefined)}
+                  onClick={() => ctx.stopStack()}
                   style={{
                     background: 'transparent', border: `1px solid ${C.border}`,
                     color: C.text, font: `500 11px ${F.sans}`, padding: '3px 9px',
-                    cursor: missionActive ? 'default' : 'pointer',
+                    cursor: stack.state === 'stopping' || missionActive
+                      ? 'default' : 'pointer',
                   }}
                 >
-                  Stop stack
+                  {stack.state === 'stopping' ? 'Stopping…' : 'Stop stack'}
                 </button>
               )}
+              {stack && missionActive && stack.state !== 'stopping' ? (
+                <button
+                  type="button"
+                  disabled={missionBusy}
+                  data-tip={'cancels the running mission, waits up to 10 s for it to '
+                    + 'end, and tears the stack down either way'}
+                  onClick={() => ctx.stopStack(true)}
+                  style={{
+                    background: 'transparent', border: `1px solid ${C.bad}`,
+                    color: C.bad, font: `500 11px ${F.sans}`, padding: '3px 9px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Force stop
+                </button>
+              ) : null}
+              <label
+                style={{
+                  display: 'flex', gap: 5, alignItems: 'center',
+                  font: `10.5px ${F.mono}`, color: C.text3, cursor: 'pointer',
+                }}
+                data-tip={'Records the same topics a measured run records, then '
+                  + 'computes metrics.json and plot.png from the bag. MEASURED cost on '
+                  + 'this machine: ~20 MB per run, and the metrics pass blocks the '
+                  + 'stack for a few seconds after the mission ends.'}
+              >
+                <input
+                  type="checkbox"
+                  checked={ctx.recordBag}
+                  onChange={(event) => ctx.setRecordBag(event.target.checked)}
+                />
+                Record bag + metrics
+              </label>
+              {stack && stack.state !== 'idle' ? (
+                <CopyButton
+                  label="Copy stack log"
+                  text={async () => {
+                    const response = await fetch('/api/stack/log?tail=262144');
+                    const text = await response.text();
+                    if (!response.ok) throw new Error(text.slice(0, 200));
+                    return text;
+                  }}
+                />
+              ) : null}
             </div>
+
+            {stack?.state === 'ready' && !missionActive ? (
+              <div style={{ display: 'grid', gap: 5 }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => ctx.setPick(ctx.pick === 'repos' ? null : 'repos')}
+                    style={{
+                      background: ctx.pick === 'repos' ? C.command : 'transparent',
+                      border: `1px dashed ${C.command}`,
+                      color: ctx.pick === 'repos' ? C.ink : C.draftText,
+                      font: `500 11px ${F.sans}`, padding: '3px 9px', cursor: 'pointer',
+                    }}
+                  >
+                    {ctx.pick === 'repos' ? 'Picking… click the map' : 'Pick reposition'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(ctx.blockReason) || !reposReady
+                      || ctx.pending('repos')}
+                    data-tip={ctx.blockReason || (reposReady
+                      ? undefined
+                      : 'pick a destination on the map first')}
+                    onClick={() => ctx.sendReposition(
+                      Number(ctx.repos.x), Number(ctx.repos.y), Number(ctx.repos.yaw))}
+                    style={{
+                      background: reposReady && !ctx.blockReason ? C.text : 'transparent',
+                      border: `1px solid ${reposReady && !ctx.blockReason
+                        ? C.text : C.lineMid}`,
+                      color: reposReady && !ctx.blockReason ? C.ink : C.text5,
+                      font: `600 11px ${F.sans}`, padding: '3px 9px',
+                      cursor: reposReady && !ctx.blockReason ? 'pointer' : 'help',
+                    }}
+                  >
+                    {ctx.pending('repos') ? 'Pending…' : 'Reposition body'}
+                  </button>
+                </div>
+                <div style={{ font: `10px/1.45 ${F.mono}`, color: C.text4 }}>
+                  {ctx.isCar
+                    ? 'moves the body in gz and pre-flights the destination against the '
+                      + 'map. ArduPilot\u2019s EKF3 is not seedable, so the ESTIMATE stays '
+                      + 'where it was and diverges by the move distance.'
+                      + ' To start clean at a new pose instead, Stop the stack and Start '
+                      + 'it with a spawn pose \u2014 that measures the alignment at the '
+                      + 'new pose.'
+                    : 'moves the body in gz, pre-flights the destination against the map '
+                      + 'and reseeds AMCL through /initialpose (3x).'
+                      + ' To start clean at a new pose instead, Stop the stack and Start '
+                      + 'it with a spawn pose \u2014 that measures the alignment at the '
+                      + 'new pose.'}
+                </div>
+              </div>
+            ) : null}
 
             {startDisabledReason ? (
               <div style={{ font: `10.5px ${F.sans}`, color: C.text4 }}>

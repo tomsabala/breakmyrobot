@@ -25,11 +25,17 @@ Nothing here tests wiring.
 import json
 import math
 import os
+import subprocess
+import threading
+import time
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from ral_eval.dashboard_api import (
+    Broadcaster,
+    Gateway,
     _floats,
+    _pid_namespace,
     build_run_index,
     encode_estimate,
     encode_fault_event,
@@ -310,3 +316,205 @@ def test_a_json_body_with_whole_numbers_still_builds_a_request():
     assert built.enabled is False
     assert built.max_range_m == 12.0
     assert built.dropout_probability == 1.0
+
+
+class _FakeChild:
+    """A `ros2 launch` process that can be made to exit on command."""
+
+    def __init__(self, pid=424242):
+        self.pid = pid
+        self.returncode = None
+        self.killed = False
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.returncode = self.returncode if self.returncode is not None else 0
+        return self.returncode
+
+    def exit_with(self, code):
+        self.returncode = code
+
+
+class _FakeTelemetry:
+    """The fields stack_payload reads; nothing in these cases publishes."""
+
+    def __init__(self):
+        self.bringup_seen = {}
+        self.bringup_at_wall = {}
+        self.bumper_available = None
+        self.bumper_reason = 'no stack in this test'
+
+    def detach_profile(self):
+        """Match TelemetryNode's interface; there is nothing to detach."""
+
+
+def _gateway(tmp_path):
+    """
+    Build a Gateway with no ROS and no child, for the state-machine cases.
+
+    __init__ builds a TelemetryNode and an rclpy executor, neither of which
+    these cases touch; `__new__` plus the fields the lifecycle actually reads
+    keeps the test to the state machine it is about.
+    """
+    gateway = Gateway.__new__(Gateway)
+    gateway.repo_root = str(tmp_path)
+    gateway.runs_dir = os.path.join(str(tmp_path), 'runs')
+    gateway.lock = threading.RLock()
+    gateway._epoch = 0
+    gateway._orphan_pgid = None
+    gateway._state_path = os.path.join(str(tmp_path), 'logs', 'stack_state.json')
+    gateway._audit_path = os.path.join(str(tmp_path), 'logs', 'stack_lifecycle.jsonl')
+    gateway._rtf_recent = []
+    gateway.state = 'idle'
+    gateway.detail = ''
+    gateway.robot = None
+    gateway.seed = 1
+    gateway.spawn = None
+    gateway.started_wall = None
+    gateway.started_wall_utc = None
+    gateway.wall_limit_s = None
+    gateway.log_path = None
+    gateway.prepared = False
+    gateway.prepare_record = {}
+    gateway.launch = None
+    gateway.launch_log = None
+    gateway.profile = None
+    gateway.mission_node = None
+    gateway.driver = None
+    gateway.worker = None
+    gateway.bringup_expected = []
+    gateway._worker_stop = threading.Event()
+    gateway.mission = None
+    gateway.pending_mission = None
+    gateway.cancel_requested = False
+    gateway._stop = threading.Event()
+    gateway.out = Broadcaster()
+    gateway.telemetry = _FakeTelemetry()
+    return gateway
+
+
+def test_a_superseded_worker_may_not_write_the_stack_state(tmp_path):
+    """
+    The wedge this guard exists for.
+
+    A bring-up abandoned by a stop keeps running until its own deadline and
+    then writes `failed` - or worse, `ready` - over a gateway that has been
+    idle for minutes. The operator then sees a stack that does not exist and
+    every control acts on nothing.
+    """
+    gateway = _gateway(tmp_path)
+    gateway._epoch = 1                       # a start happened
+    gateway._epoch = 2                       # ... and then a stop superseded it
+
+    gateway._set_state('ready', 'stack up and prepared to accept a goal', epoch=1)
+
+    assert gateway.state == 'idle', 'the stale worker wrote state it no longer owns'
+    # The same write from the CURRENT epoch is accepted: the guard is about
+    # ownership, not about forbidding writes.
+    gateway._set_state('ready', 'stack up', epoch=2)
+    assert gateway.state == 'ready'
+
+
+def test_a_child_that_exits_on_its_own_becomes_crashed_and_is_reported(tmp_path):
+    """`ready` with a dead child is a lie the operator cannot see through."""
+    gateway = _gateway(tmp_path)
+    child = _FakeChild()
+    gateway.launch = child
+    gateway.robot = 'car'
+    gateway.started_wall = time.monotonic() - 42.0
+    gateway.state = 'ready'
+
+    gateway._watchdog_tick()
+    assert gateway.state == 'ready', 'a live child must not be reported as crashed'
+
+    child.exit_with(137)                     # SIGKILL from a second shell
+    gateway._watchdog_tick()
+
+    assert gateway.state == 'crashed'
+    assert '137' in gateway.detail, gateway.detail
+    assert gateway._worker_stop.is_set(), 'the service loop must be told to stop'
+
+
+def test_a_second_stop_while_stopping_is_refused_and_tears_nothing_down(tmp_path):
+    """
+    Two stops used to run the whole teardown twice.
+
+    The second one walked a half-cleared gateway and left the state machine at
+    `stopping -> ready -> idle` for a single operator action.
+    """
+    gateway = _gateway(tmp_path)
+    child = _FakeChild()
+    gateway.launch = child
+    gateway.state = 'stopping'
+
+    answer = gateway.stop_stack()
+
+    assert answer['accepted'] is False
+    assert 'already in progress' in answer['message']
+    assert gateway.state == 'stopping', 'the refused stop changed the state'
+    assert child.returncode is None, 'the refused stop tore the child down'
+
+
+def test_a_live_stack_from_a_previous_gateway_is_adopted_and_can_be_stopped(tmp_path):
+    """
+    The wedge: a gateway restart used to leave the old stack unreachable.
+
+    Start refused on the old stack's /clock and Stop answered "no stack is
+    running", so the only way out was a shell. The handle on disk names the
+    process GROUP, which is what the kill ladder can address.
+    """
+    gateway = _gateway(tmp_path)
+    # A stand-in for `ros2 launch`: its own session, so it owns a process
+    # group exactly as the real child does.
+    child = subprocess.Popen(['sleep', '300'], start_new_session=True)
+    os.makedirs(os.path.dirname(gateway._state_path), exist_ok=True)
+    with open(gateway._state_path, 'w') as handle:
+        json.dump({'epoch': 1, 'pid_ns': _pid_namespace(), 'state': 'ready',
+                   'robot': 'roomba', 'seed': 1, 'spawn': {'x': 0.5, 'y': 0.5,
+                                                           'yaw': 0.0},
+                   'pid': child.pid, 'pgid': os.getpgid(child.pid),
+                   'started_wall_utc': '2026-10-26T00:00:00Z',
+                   'log_path': '/ws/logs/stack_roomba.log'}, handle)
+    try:
+        gateway.adopt_existing_stack()
+
+        assert gateway.state == 'orphaned', 'a live previous stack was not adopted'
+        assert str(child.pid) in gateway.detail
+        assert gateway.robot == 'roomba'
+
+        answer = gateway.stop_stack()
+
+        assert answer['accepted'] is True
+        assert gateway.state == 'idle'
+        assert child.poll() is not None, 'the adopted process group outlived the stop'
+        assert not os.path.exists(gateway._state_path), 'the handle outlived the stop'
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+
+
+def test_a_handle_from_another_pid_namespace_is_never_signalled(tmp_path):
+    """
+    A container's pgid means nothing in the next container.
+
+    scripts/dashboard.sh runs each gateway in its own container, so the pid
+    recorded by the previous one names a DIFFERENT process here - or none.
+    Adopting it would make Stop signal an unrelated process group.
+    """
+    gateway = _gateway(tmp_path)
+    own_group = os.getpgid(os.getpid())
+    os.makedirs(os.path.dirname(gateway._state_path), exist_ok=True)
+    with open(gateway._state_path, 'w') as handle:
+        json.dump({'epoch': 1, 'pid_ns': 'pid:[4026531999]', 'state': 'ready',
+                   'robot': 'car', 'pid': os.getpid(), 'pgid': own_group,
+                   'started_wall_utc': '2026-10-26T00:00:00Z',
+                   'log_path': '/ws/logs/stack_car.log'}, handle)
+
+    gateway.adopt_existing_stack()
+
+    assert gateway.state == 'idle', 'a handle from another namespace was adopted'
+    assert gateway._orphan_pgid is None
+    assert not os.path.exists(gateway._state_path)

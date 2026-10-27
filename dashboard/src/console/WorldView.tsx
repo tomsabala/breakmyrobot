@@ -2,20 +2,39 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { C, F } from '../theme/tokens';
 import { Tip, f2 } from '../ui/primitives';
 import { mapToWorld, worldToMap } from '../client/store';
-import { drawMap, toMap } from './draw';
-import type { DraftBox, DraftPose, Layers, View } from './draw';
+import { drawMap, footprintLabel, panBy, toMap, zoomAt } from './draw';
+import type { DraftBox, DraftPose, Layers } from './draw';
 import { num } from './faults';
-import type { ConsoleCtx } from './context';
+import type { ConsoleCtx, PickKind } from './context';
 
 const LAYER_ORDER: (keyof Layers)[] = ['map', 'world', 'gcost', 'lcost', 'truth', 'est',
   'plan', 'scan', 'raw', 'foot'];
 
+/** What a pick mode asks the operator to do. One entry per PickKind, so a new
+ *  mode cannot inherit another's instructions. */
+const PICK_BANNER: Record<PickKind, string> = {
+  obs: 'Drag a rectangle for the obstacle footprint (world frame), or click to '
+    + 'place at the current size',
+  kid: 'Click the kidnap destination; drag to set yaw',
+  goal: 'Click the goal position (world frame); drag to set yaw',
+  start: 'Click the start position (world frame); drag to set yaw',
+  repos: 'Click where the body should be moved to (world frame); drag to set yaw',
+};
+
 export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
   const { state, reference, profile, isCar } = ctx;
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const viewRef = useRef<View | null>(null);
-  const dragRef = useRef<{ kind: 'obs' | 'kid' | 'goal'; a: { x: number; y: number } } | null>(null);
+  // The canvas and the view it produced live on ctx: Console's keyboard zoom
+  // needs both, and a second copy here would drift from it.
+  const { canvasRef, viewRef } = ctx;
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<
+    | { kind: 'obs' | 'kid' | 'goal' | 'start' | 'repos'; a: { x: number; y: number } }
+    | { kind: 'pan'; px: number; py: number; moved: boolean }
+    | null
+  >(null);
   const [, setDrawTick] = useState(0);
+  const [zoomLabel, setZoomLabel] = useState('1.00×');
+  const zoomShownRef = useRef(1);
 
   const draftBox: DraftBox | null = (() => {
     if (ctx.sheet !== 'obs' || !(ctx.drawerOpen || ctx.pick === 'obs')) return null;
@@ -46,6 +65,26 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
     return { x, y, yaw: Number.isFinite(yaw) ? yaw : 0 };
   })();
 
+  // The spawn pose is a draft only while the stack is IDLE: once a stack is
+  // up that pose is history, and the control that moves the body is the
+  // reposition rather than this one.
+  const draftStart: DraftPose | null = (() => {
+    if ((ctx.state.stack?.state ?? 'idle') !== 'idle') return null;
+    const x = num(ctx.start.x);
+    const y = num(ctx.start.y);
+    const yaw = num(ctx.start.yaw);
+    if (x === null || y === null) return null;
+    return { x, y, yaw: yaw ?? 0 };
+  })();
+
+  const draftRepos: DraftPose | null = (() => {
+    const x = num(ctx.repos.x);
+    const y = num(ctx.repos.y);
+    const yaw = num(ctx.repos.yaw);
+    if (x === null || y === null) return null;
+    return { x, y, yaw: yaw ?? 0 };
+  })();
+
   useEffect(() => {
     let frame = 0;
     const loop = () => {
@@ -61,24 +100,72 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
         draftBox,
         draftKidnap,
         draftGoal,
+        draftStart,
+        draftRepos,
         armed: ctx.armed.map((a) => ({ slot: a.slot, kind: a.kind, params: a.params })),
         linkUp: state.linkUp,
         goalToleranceM: profile.goal_tolerance_m,
+        camera: ctx.camera.current,
       });
+      // One setState per zoom CHANGE, not per frame. The camera itself is a
+      // ref, so this label is the only thing a wheel gesture re-renders, and
+      // it re-renders WorldView alone.
+      const zoom = ctx.camera.current.zoom;
+      if (zoom !== zoomShownRef.current) {
+        zoomShownRef.current = zoom;
+        setZoomLabel(`${zoom.toFixed(2)}×`);
+      }
     };
     frame = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(frame);
   });
 
-  const pointer = useCallback((event: React.MouseEvent) => {
+  const pointerAt = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     const view = viewRef.current;
     if (!canvas || !view) return null;
-    const m = toMap(view, canvas, event.clientX, event.clientY);
+    const m = toMap(view, canvas, clientX, clientY);
     return mapToWorld(m.x, m.y, 0, reference.world_to_map);
-  }, [reference]);
+  }, [canvasRef, reference, viewRef]);
+  const pointer = useCallback(
+    (event: React.MouseEvent) => pointerAt(event.clientX, event.clientY), [pointerAt]);
+
+  /** Obstacle selection, which now happens on RELEASE: a left press with no
+   *  pick mode active starts a pan, and only a release that never moved is a
+   *  click on an obstacle. */
+  const selectAt = (world: { x: number; y: number }) => {
+    const hit = Object.keys(state.obstacles).find((name) => {
+      const o = state.obstacles[name];
+      return Math.abs(world.x - o.x) <= o.sx / 2 + 0.12
+        && Math.abs(world.y - o.y) <= o.sy / 2 + 0.12;
+    });
+    ctx.setSelectedObstacle(hit ?? null);
+    ctx.setPop(null);
+  };
+
+  const beginPan = (event: React.MouseEvent) => {
+    dragRef.current = {
+      kind: 'pan', px: event.clientX, py: event.clientY, moved: false,
+    };
+    // The overlay has no mouse-leave handling, so a release outside it would
+    // leave the pan latched and the map unusable until the next press.
+    const onWindowUp = (release: MouseEvent) => {
+      window.removeEventListener('mouseup', onWindowUp);
+      const drag = dragRef.current;
+      dragRef.current = null;
+      if (!drag || drag.kind !== 'pan' || drag.moved) return;
+      const world = pointerAt(release.clientX, release.clientY);
+      if (world) selectAt(world);
+    };
+    window.addEventListener('mouseup', onWindowUp);
+  };
 
   const onDown = (event: React.MouseEvent) => {
+    if (event.button === 1 || (!ctx.pick && event.button === 0)) {
+      event.preventDefault();          // middle button: suppress autoscroll
+      beginPan(event);
+      return;
+    }
     const world = pointer(event);
     if (!world) return;
     if (ctx.pick === 'obs') {
@@ -96,18 +183,35 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
       ctx.setGoal((g) => ({ ...g, x: f2(world.x), y: f2(world.y) }));
       return;
     }
-    const hit = Object.keys(state.obstacles).find((name) => {
-      const o = state.obstacles[name];
-      return Math.abs(world.x - o.x) <= o.sx / 2 + 0.12
-        && Math.abs(world.y - o.y) <= o.sy / 2 + 0.12;
-    });
-    ctx.setSelectedObstacle(hit ?? null);
-    ctx.setPop(null);
+    if (ctx.pick === 'start') {
+      dragRef.current = { kind: 'start', a: world };
+      ctx.setStart((f) => ({ ...f, x: f2(world.x), y: f2(world.y) }));
+      return;
+    }
+    if (ctx.pick === 'repos') {
+      dragRef.current = { kind: 'repos', a: world };
+      ctx.setRepos((f) => ({ ...f, x: f2(world.x), y: f2(world.y) }));
+      return;
+    }
   };
 
   const onMove = (event: React.MouseEvent) => {
     const drag = dragRef.current;
     if (!drag) return;
+    if (drag.kind === 'pan') {
+      const dx = event.clientX - drag.px;
+      const dy = event.clientY - drag.py;
+      // 3 screen pixels: below this a press-release is a click, not a pan.
+      if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+      const view = viewRef.current;
+      const canvas = canvasRef.current;
+      if (!view || !canvas) return;
+      drag.moved = true;
+      drag.px = event.clientX;
+      drag.py = event.clientY;
+      ctx.camera.current = panBy(ctx.camera.current, view, canvas, dx, dy);
+      return;                          // the render loop redraws; no setState
+    }
     const world = pointer(event);
     if (!world) return;
     const dx = world.x - drag.a.x;
@@ -131,14 +235,40 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
     if (drag.kind === 'goal' && distance > 0.1) {
       ctx.setGoal((g) => ({ ...g, yaw: f2(Math.atan2(dy, dx)) }));
     }
+    if (drag.kind === 'start' && distance > 0.1) {
+      ctx.setStart((f) => ({ ...f, yaw: f2(Math.atan2(dy, dx)) }));
+    }
+    if (drag.kind === 'repos' && distance > 0.1) {
+      ctx.setRepos((f) => ({ ...f, yaw: f2(Math.atan2(dy, dx)) }));
+    }
     setDrawTick((v) => v + 1);
   };
 
   const onUp = () => {
-    if (!dragRef.current) return;
+    // A pan is ended by the window-level listener beginPan installed, which
+    // also decides whether the release was a click. Clearing the pick mode
+    // here would cancel it on every empty-floor drag.
+    if (!dragRef.current || dragRef.current.kind === 'pan') return;
     dragRef.current = null;
     ctx.setPick(null);
   };
+
+  // React's synthetic onWheel cannot reliably preventDefault, so the wheel is
+  // a native non-passive listener on the interaction surface.
+  useEffect(() => {
+    const el = surfaceRef.current;
+    if (!el) return undefined;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const view = ctx.viewRef.current;
+      const canvas = ctx.canvasRef.current;
+      if (!view || !canvas) return;
+      ctx.camera.current = zoomAt(ctx.camera.current, view, canvas,
+        event.clientX, event.clientY, Math.exp(-event.deltaY * 0.0015));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [ctx]);
 
   const scan = state.scan;
   const returns = scan ? scan.ranges.filter((r) => r !== null).length : null;
@@ -156,26 +286,62 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
   const stack = state.stack;
   const bringing = stack?.state === 'starting';
 
+  // Does this robot PUBLISH a plan? The profile's command block decides: the
+  // car's `planner_action` is what makes planner_server's path reach /plan,
+  // and removing that key returns the platform to steering at the goal.
+  const command = profile.command as unknown as Record<string, unknown>;
+  const hasPlanner = profile.mission_driver === 'nav2'
+    || typeof command.planner_action === 'string';
+  const replanPeriod = typeof command.replan_period_sim_s === 'number'
+    ? command.replan_period_sim_s
+    : null;
+
   const layerLabel: Record<keyof Layers, string> = {
     map: isCar
-      ? 'Background grid (committed map, NOT the robot\u2019s own)'
+      ? (hasPlanner
+        ? 'Map (/map from map_server; what planner_server plans against)'
+        : 'Background grid (committed map, NOT the robot\u2019s own)')
       : 'Map (static, /map from map_server)',
     world: `World geometry (${reference.world_geometry.source.split('/').slice(-1)[0]})`,
     gcost: 'Global costmap (/global_costmap/costmap)',
     lcost: 'Local costmap',
     truth: 'GROUND TRUTH (evaluation only)',
     est: `ESTIMATE — ${profile.estimate.label}`,
-    plan: 'Plan (/plan, Nav2 global planner)',
+    plan: hasPlanner
+      ? `Plan (/plan, ${isCar
+        ? 'nav2 planner_server, followed as GUIDED setpoints'
+        : 'Nav2 global planner'})`
+      : 'Plan (/plan)',
     scan: '/scan — what the consumers see',
     raw: '/scan_raw — the undegraded sensor stream',
-    foot: `Footprint r ${profile.footprint.radius_m} m (truth and estimate)`,
+    foot: `Footprint ${footprintLabel(profile)} (truth and estimate)`,
+  };
+  // Tips for the layers that are ENABLED but carry a limitation a reader
+  // must know; the disabled ones show `layerDisabled` instead.
+  const layerTip: Partial<Record<keyof Layers, string>> = {
+    ...(hasPlanner && isCar && replanPeriod !== null
+      ? {
+        plan: `planner_server plans the path; the driver commands its waypoints `
+          + `one at a time as GUIDED setpoints and re-plans every ${replanPeriod} s `
+          + 'of SIM time. Between replans ArduRover steers straight at the current '
+          + 'setpoint and has NO reactive obstacle avoidance, so a new obstacle '
+          + 'changes the route only at the next replan.',
+      }
+      : {}),
   };
   const layerDisabled: Partial<Record<keyof Layers, string>> = {
     lcost: 'published in the odom frame; map←odom composition is not implemented',
+    // Keyed on what the PROFILE configures, never on the robot's name: the
+    // car publishes /plan exactly when its command block names a
+    // planner_action, and nothing else about the platform decides it.
+    ...(hasPlanner ? {} : {
+      plan: 'this platform runs no planner and publishes no /plan; the autopilot '
+        + 'steers straight at the commanded setpoint',
+    }),
     ...(isCar
       ? {
-        plan: 'ArduRover plans inside the autopilot; this platform publishes no /plan',
-        gcost: 'no Nav2 on this platform, so there is no costmap',
+        gcost: 'the car runs planner_server but no Nav2 controller, so nothing '
+          + 'publishes /global_costmap/costmap for the console to draw',
       }
       : {}),
   };
@@ -214,13 +380,14 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
           >
             {LAYER_ORDER.map((key) => {
               const reason = layerDisabled[key];
+              const tip = reason ?? layerTip[key];
               const on = ctx.layers[key] && !reason;
               return (
                 <button
                   key={key}
                   type="button"
                   disabled={Boolean(reason)}
-                  data-tip={reason}
+                  data-tip={tip}
                   onClick={() => ctx.toggleLayer(key)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
@@ -243,6 +410,17 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
             })}
           </div>
         ) : null}
+        <span style={{ font: `11px ${F.mono}`, color: C.text4 }}>{zoomLabel}</span>
+        <button
+          type="button"
+          onClick={ctx.resetCamera}
+          style={{
+            background: 'transparent', border: `1px solid ${C.border}`, color: C.text,
+            font: `500 11px ${F.sans}`, padding: '3px 9px', cursor: 'pointer',
+          }}
+        >
+          Reset view (0)
+        </button>
         <div style={{ flex: 1 }} />
         <button
           type="button"
@@ -259,12 +437,16 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
 
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <div
+          ref={surfaceRef}
           onMouseDown={onDown}
           onMouseMove={onMove}
           onMouseUp={onUp}
           style={{
             position: 'absolute', inset: 0,
             cursor: ctx.pick ? 'crosshair' : 'default',
+            // A drag over the canvas must pan, not select the page's text or
+            // trigger a touch scroll.
+            touchAction: 'none', userSelect: 'none',
           }}
         >
           <canvas
@@ -324,13 +506,7 @@ export function WorldView({ ctx }: { ctx: ConsoleCtx }) {
             font: `600 11.5px ${F.sans}`, display: 'flex', gap: 10, alignItems: 'center',
           }}
           >
-            <span>
-              {ctx.pick === 'obs'
-                ? 'Drag a rectangle for the obstacle footprint (world frame), or click to place at the current size'
-                : ctx.pick === 'kid'
-                  ? 'Click the kidnap destination; drag to set yaw'
-                  : 'Click the goal position (world frame); drag to set yaw'}
-            </span>
+            <span>{PICK_BANNER[ctx.pick]}</span>
             <button
               type="button"
               onClick={() => ctx.setPick(null)}

@@ -63,7 +63,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 
 from ament_index_python.packages import get_package_share_directory
@@ -650,17 +650,26 @@ class TelemetryNode(Node):
             self._dynamic.append(self.create_subscription(
                 Twist, profile['command']['topic'],
                 lambda msg: self.out.publish('cmd', encode_cmd(msg, self.sim_now())), 10))
-            self._dynamic.append(self.create_subscription(
-                Path, '/plan', lambda msg: self.out.publish('plan', encode_plan(msg)), 10))
+            # The action FEEDBACK stays gated on velocity_twist: the car has
+            # no navigate_to_pose action at all, only a planner service.
             self._dynamic.append(self.create_subscription(
                 NavigateToPose.Impl.FeedbackMessage, '/navigate_to_pose/_action/feedback',
                 lambda msg: self.out.publish('fb', encode_feedback(msg)), 10))
             self._dynamic.append(self.create_subscription(
-                OccupancyGrid, '/map',
-                lambda msg: self.out.publish('map', encode_grid(msg)), latched))
-            self._dynamic.append(self.create_subscription(
                 OccupancyGrid, '/global_costmap/costmap',
                 lambda msg: self.out.publish('costmap', encode_grid(msg)), latched))
+
+        # /plan and /map belong to whatever PLANS, not to one robot: the car
+        # runs map_server + planner_server for global planning only, and its
+        # driver publishes the path it is following on the same /plan the
+        # Roomba's Nav2 uses. Keyed on the profile, never on the robot name.
+        if (profile['command']['kind'] == 'velocity_twist'
+                or 'planner_action' in profile['command']):
+            self._dynamic.append(self.create_subscription(
+                Path, '/plan', lambda msg: self.out.publish('plan', encode_plan(msg)), 10))
+            self._dynamic.append(self.create_subscription(
+                OccupancyGrid, '/map',
+                lambda msg: self.out.publish('map', encode_grid(msg)), latched))
 
         if profile['mission_driver'] == 'mavros_guided':
             from mavros_msgs.msg import NavControllerOutput, State
@@ -1146,6 +1155,20 @@ def committed_grid_payload(map_yaml: str) -> dict:
 
 # -- the gateway --------------------------------------------------------------
 
+def _pid_namespace() -> str:
+    """
+    Return this process's PID namespace, as the kernel names it.
+
+    A pid or pgid is only meaningful inside the namespace it was read in, so
+    the stack handle on disk records this beside them: a gateway started in a
+    new container must not signal a pgid a previous container's gateway wrote.
+    """
+    try:
+        return os.readlink('/proc/self/ns/pid')
+    except OSError:
+        return 'unknown'
+
+
 class Gateway:
     """Owns the stack, the mission and the fault clients; one at a time each."""
 
@@ -1159,6 +1182,28 @@ class Gateway:
         self.executor.add_node(self.telemetry)
 
         self.lock = threading.RLock()
+        # Every start takes the next epoch. A worker may only write state for
+        # the epoch it was started in: without this, a bring-up abandoned by a
+        # stop goes on to write `failed` or `ready` over an idle gateway
+        # minutes later, and the UI shows a stack that does not exist.
+        self._epoch = 0
+        # The process group of a stack a PREVIOUS gateway started and left
+        # running, adopted from logs/stack_state.json at start-up. The
+        # gateway has no MissionNode or driver for it, so it may be stopped
+        # and nothing else.
+        self._orphan_pgid = None
+        self._state_path = os.path.join(repo_root, 'logs', 'stack_state.json')
+        self._audit_path = os.path.join(repo_root, 'logs', 'stack_lifecycle.jsonl')
+        # The last 20 real-time-factor samples, so a dashboard run can record
+        # the same `rtf_samples` field a measured run does instead of null.
+        self._rtf_recent = []
+        # Per-run artifact state: the open events.jsonl handle, the argv the
+        # running stack was launched with and the spawn pose check it passed.
+        # All three are written into every run this gateway produces.
+        self.event_log = None
+        self.launch_command = None
+        self.spawn_preflight = None
+        self._run_interventions = []
         self.state = 'idle'
         self.robot = None
         self.seed = 1
@@ -1193,6 +1238,8 @@ class Gateway:
         threading.Thread(target=self._spin_telemetry, name='telemetry',
                          daemon=True).start()
         threading.Thread(target=self._rtf_loop, name='rtf', daemon=True).start()
+        threading.Thread(target=self._watchdog_loop, name='watchdog',
+                         daemon=True).start()
 
     def _spin_telemetry(self) -> None:
         while not self._stop.is_set() and rclpy.ok():
@@ -1207,16 +1254,237 @@ class Gateway:
             if self.state not in ('ready', 'starting'):
                 continue
             samples = measure_rtf(WORLD)
+            # Retained so a dashboard run can report the same measured field a
+            # scenario run does. measure_rtf returns ONE comma-joined string
+            # per call, so the strings are kept WHOLE: list(samples) splits a
+            # string into characters, and run.json then carried ", 0, ., 9"
+            # instead of the factors (MEASURED on the first run that wrote one).
+            self._rtf_recent = (self._rtf_recent + [samples])[-5:]
             self.out.publish('rtf', {'world': WORLD, 'samples': samples,
                                      'source': f'gz topic -e -t /world/{WORLD}/stats'})
 
+    def _child_alive(self) -> bool:
+        """Report whether the launched `ros2 launch` process is still running."""
+        return self.launch is not None and self.launch.poll() is None
+
+    def _watchdog_loop(self) -> None:
+        """1 Hz: notice a stack that died on its own."""
+        while not self._stop.wait(1.0):
+            self._watchdog_tick()
+            self._reap_orphans()
+
+    def _reap_orphans(self) -> None:
+        """
+        Reap reparented grandchildren. The gateway is PID 1 in its container.
+
+        When a stack is killed from outside, `ros2 launch`'s children are
+        reparented to this process and stay zombies until someone waits on
+        them - nine of them after one `kill -9` of the launch group, MEASURED.
+        Only run while nothing this gateway tracks is alive, so a blind
+        waitpid cannot steal the recorder's or the launch child's exit status.
+        """
+        if self.mission is not None or self._child_alive():
+            return
+        while True:
+            try:
+                pid, _status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                return
+            if pid == 0:
+                return
+
+    def _watchdog_tick(self) -> None:
+        """
+        One check of the child against the state the gateway claims.
+
+        Without it the gateway reports `ready` for a tree that was killed from
+        a second shell, and every control it offers acts on nothing. The child
+        is REAPED here too, so a crashed stack does not become a zombie.
+        """
+        with self.lock:
+            if self.state not in ('starting', 'ready'):
+                return
+            if self.launch is None or self.launch.poll() is None:
+                return
+            code = self.launch.returncode
+            elapsed = (time.monotonic() - self.started_wall
+                       if self.started_wall is not None else 0.0)
+            self._worker_stop.set()
+            if self.launch_log is not None:
+                self.launch_log.close()
+                self.launch_log = None
+            self._audit('crash', f'the stack process exited with code {code}',
+                        exit_code=code)
+            self._set_state(
+                'crashed',
+                f'the stack process exited with code {code} after {elapsed:.0f} s; '
+                'no stack is running. Stop clears the remains before another start.')
+
     def shutdown(self) -> None:
         self._stop.set()
-        if self.state in ('ready', 'failed', 'starting'):
+        # Anything but `idle` owns a process tree. `stopping` and a running
+        # mission used to be excluded here, which leaked the whole tree on
+        # SIGTERM - the gz server, the stack and (for the car) the autopilot
+        # all survived the gateway that started them.
+        if self.state != 'idle':
             try:
-                self.stop_stack()
+                self.stop_stack({'force': True})
             except Exception:                           # noqa: BLE001 - reported
                 traceback.print_exc()
+
+    # -- on-disk handle and audit trail ---------------------------------------
+    def _persist_state(self) -> None:
+        """
+        Rewrite logs/stack_state.json, or delete it once idle.
+
+        This file is what lets a NEW gateway find a stack an old one left
+        running: a pid alone is not enough, the process GROUP is what the
+        kill ladder addresses. The PID NAMESPACE is recorded with it, because
+        a pgid only means anything inside the namespace it was read in -
+        scripts/dashboard.sh runs each gateway in its own container, and
+        reading a previous container's pgid as if it were this one's would
+        address an unrelated process.
+        """
+        try:
+            os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
+            if self.state == 'idle':
+                if os.path.exists(self._state_path):
+                    os.remove(self._state_path)
+                return
+            pid = self.launch.pid if self.launch is not None else None
+            pgid = None
+            if pid is not None:
+                try:
+                    pgid = os.getpgid(pid)
+                except ProcessLookupError:
+                    pgid = None
+            elif self._orphan_pgid is not None:
+                pgid = self._orphan_pgid
+            write_json(self._state_path, {
+                'epoch': self._epoch,
+                'pid_ns': _pid_namespace(),
+                'state': self.state,
+                'robot': self.robot,
+                'seed': self.seed,
+                'spawn': self.spawn,
+                'pid': pid,
+                'pgid': pgid,
+                'started_wall_utc': self.started_wall_utc,
+                'log_path': self.log_path,
+            })
+        except Exception:                               # noqa: BLE001 - reported
+            traceback.print_exc()
+
+    def _audit(self, event: str, detail: str, exit_code=None) -> None:
+        """Append one lifecycle line. Never truncated: this is the record."""
+        try:
+            os.makedirs(os.path.dirname(self._audit_path), exist_ok=True)
+            row = {
+                'wall_utc': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'event': event,
+                'state': self.state,
+                'robot': self.robot,
+                'pid': self.launch.pid if self.launch is not None else None,
+                'exit_code': exit_code,
+                'detail': detail,
+            }
+            with open(self._audit_path, 'a') as handle:
+                handle.write(json.dumps(row) + '\n')
+        except Exception:                               # noqa: BLE001 - reported
+            traceback.print_exc()
+
+    def adopt_existing_stack(self) -> None:
+        """
+        Adopt (or reap) a stack a previous gateway left behind.
+
+        Called once at start-up. A live process group becomes `orphaned`: the
+        gateway did not create that node graph, has no MissionNode or driver
+        for it, and must not claim `ready` for it. A dead one is reaped and
+        the file removed.
+        """
+        try:
+            with open(self._state_path) as handle:
+                saved = json.load(handle)
+        except FileNotFoundError:
+            return
+        except Exception:                               # noqa: BLE001 - reported
+            traceback.print_exc()
+            return
+        pgid = saved.get('pgid')
+        pid = saved.get('pid')
+        robot = saved.get('robot')
+        saved_ns = saved.get('pid_ns')
+        here_ns = _pid_namespace()
+        if saved_ns is not None and saved_ns != here_ns:
+            # A different PID namespace: scripts/dashboard.sh gives each
+            # gateway its own container, and a container's PID 1 is this
+            # process - when it exits the kernel kills everything else in
+            # that namespace, including the stack. The recorded pgid means
+            # nothing here, and acting on it would signal an unrelated
+            # process, so the handle is reaped and said so.
+            try:
+                os.remove(self._state_path)
+            except OSError:
+                pass
+            self._audit('reap', f'logs/stack_state.json was written in PID namespace '
+                                f'{saved_ns} and this gateway runs in {here_ns}; the '
+                                f'stack it names (pid {pid}, robot {robot}) died with '
+                                'that namespace, so the handle was removed')
+            return
+        alive = False
+        if isinstance(pgid, int):
+            try:
+                os.killpg(pgid, 0)
+                alive = True
+            except (ProcessLookupError, PermissionError):
+                alive = False
+        if not alive:
+            try:
+                os.remove(self._state_path)
+            except OSError:
+                pass
+            self._audit('reap', f'logs/stack_state.json named pid {pid} (robot '
+                                f'{robot}), which is gone; the file was removed')
+            return
+        self._orphan_pgid = pgid
+        self.robot = robot
+        self.seed = saved.get('seed', 1)
+        self.spawn = saved.get('spawn')
+        self.started_wall_utc = saved.get('started_wall_utc')
+        self.log_path = saved.get('log_path')
+        self._audit('adopt', f'adopted process group {pgid} (pid {pid}, robot {robot})')
+        self._set_state(
+            'orphaned',
+            f'a stack started by a previous gateway (pid {pid}, robot {robot}) is still '
+            'running; this gateway did not create it and has no mission node for it. '
+            'Stop it before starting another.')
+
+    def _kill_launch(self, reason: str) -> None:
+        """
+        SIGINT, then SIGKILL, to the launch PROCESS GROUP.
+
+        The group, not the pid: `ros2 launch` is the parent of gz, the stack
+        and (for the car) the autopilot, and signalling only the parent leaves
+        all of them running and holding the domain.
+        """
+        if self.launch is None:
+            return
+        pid = self.launch.pid
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGINT)
+            self.launch.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                self.launch.wait(timeout=10)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+        except ProcessLookupError:
+            pass
+        self._audit('kill', reason, exit_code=self.launch.returncode)
+        if self.launch_log is not None:
+            self.launch_log.close()
+            self.launch_log = None
 
     # -- stack state ----------------------------------------------------------
     def stack_payload(self) -> dict:
@@ -1248,14 +1516,33 @@ class Gateway:
             'prepared': self.prepared,
             'prepare_record': self.prepare_record,
             'mission_active': self.mission is not None,
+            # The CHILD, not the gateway's opinion of it: `ready` with no
+            # live pid is exactly the lie the watchdog exists to catch, and
+            # an operator can see it here.
+            'child_pid': self.launch.pid if self.launch is not None else None,
+            'child_exit': self.launch.returncode if self.launch is not None else None,
             'bumper_available': self.telemetry.bumper_available,
             'bumper_reason': self.telemetry.bumper_reason,
         }
 
-    def _set_state(self, state: str, detail: str = None) -> None:
-        self.state = state
-        if detail is not None:
-            self.detail = detail
+    def _set_state(self, state: str, detail: str = None,
+                   epoch: 'int | None' = None) -> None:
+        """
+        Write the stack state, persist it and broadcast it.
+
+        `epoch` is the bring-up worker's own epoch. A worker whose epoch has
+        been superseded by a stop or a new start may NOT write: that write is
+        what turns an idle gateway into a phantom `ready` or `failed` minutes
+        after the stack it describes was torn down.
+        """
+        with self.lock:
+            if epoch is not None and epoch != self._epoch:
+                return
+            self.state = state
+            if detail is not None:
+                self.detail = detail
+            self._persist_state()
+            self._audit('state', detail if detail is not None else self.detail)
         self.out.publish('stack', self.stack_payload())
 
     def broadcast_stack(self) -> None:
@@ -1282,14 +1569,25 @@ class Gateway:
             yaw = float(spawn.get('yaw', profile['spawn']['yaw']))
 
             # A second stack over somebody else's /clock would drive the same
-            # robot from two processes. The graph is the only honest check.
+            # robot from two processes. The graph is the only honest check -
+            # but DDS discovery does not forget a publisher the instant its
+            # process dies, so a start immediately after a stop used to be
+            # refused for a stack that no longer existed. Poll until the
+            # graph settles, and report how long was waited so a genuine
+            # conflict with scripts/run_scenario.sh still reads as one.
+            waited = 0.0
             publishers = self.telemetry.count_publishers('/clock')
+            while publishers > 0 and waited < CLOCK_SETTLE_WALL:
+                time.sleep(0.5)
+                waited += 0.5
+                publishers = self.telemetry.count_publishers('/clock')
             if publishers > 0:
                 domain = os.environ.get('ROS_DOMAIN_ID', '0')
                 return {'accepted': False,
                         'message': f'a /clock publisher already exists in ROS_DOMAIN_ID '
-                                   f'{domain}; the dashboard refuses to start a second '
-                                   'stack over it'}
+                                   f'{domain} and was still there after {waited:.1f} s; '
+                                   'the dashboard refuses to start a second stack over '
+                                   'it'}
 
             # The spawn pose gets the runner's own footprint check, before
             # anything is launched: a body standing in a wall produces an
@@ -1329,6 +1627,8 @@ class Gateway:
             self.seed = seed
             self.spawn = {'x': x, 'y': y, 'yaw': yaw}
             self.spawn_map = list(spawn_map)
+            self.launch_command = list(command)
+            self.spawn_preflight = preflight
             self.prepared = False
             self.prepare_record = {}
             self.started_wall = time.monotonic()
@@ -1336,24 +1636,35 @@ class Gateway:
             self.wall_limit_s = float(profile['bringup_wall_limit_s'])
             self.bringup_expected = [entry['topic'] for entry in profile['bringup_topics']]
             self.telemetry.attach_profile(profile)
+            self._epoch += 1
+            epoch = self._epoch
+            self._audit('start', f'launched {" ".join(command)}')
             self._set_state('starting',
                             f'launched {" ".join(command)}; see {self.log_path}')
             self._worker_stop.clear()
             self.pending_mission = None
             self.worker = threading.Thread(target=self._bringup_worker, name='worker',
-                                           daemon=True)
+                                           args=(epoch,), daemon=True)
             self.worker.start()
             return {'accepted': True, 'message': 'stack starting',
                     'launch_command': command, 'log_path': self.log_path,
                     'preflight': preflight}
 
-    def _bringup_worker(self) -> None:
+    def _bringup_worker(self, epoch: int) -> None:
+        """
+        Wait for the stack, then serve it. `epoch` is this worker's licence.
+
+        Every state write carries it, so a worker abandoned by a stop writes
+        nothing; and every blocking step is followed by a cancel check, so a
+        stop does not have to wait out a 240 s bring-up budget before the
+        gateway is usable again.
+        """
         try:
             profile = self.profile
             limit = float(profile['bringup_wall_limit_s'])
             deadline = time.monotonic() + limit
             missing = list(self.bringup_expected)
-            while time.monotonic() < deadline:
+            while time.monotonic() < deadline and not self._worker_stop.is_set():
                 time.sleep(0.25)
                 self.broadcast_stack()
                 missing = [topic for topic in self.bringup_expected
@@ -1362,10 +1673,14 @@ class Gateway:
                                        and self.telemetry.sim_now() > 0.0))]
                 if not missing:
                     break
+            if self._worker_stop.is_set():
+                return                      # a stop owns the teardown from here
             if missing:
+                self._kill_launch('bring-up failed: the launch tree is torn down '
+                                  'rather than left running without a gateway')
                 self._set_state('failed',
                                 f'no messages on {", ".join(missing)} within {limit:.0f} s '
-                                f'wall; see {self.log_path}')
+                                f'wall; see {self.log_path}', epoch=epoch)
                 return
 
             # The same node and the same driver a measured run uses.
@@ -1374,8 +1689,12 @@ class Gateway:
             self.prepare_record = {}
             self.driver = build_driver(self.mission_node, profile, self.prepare_record)
             not_ready = self.driver.wait_ready(STACK_READY_WALL_LIMIT)
+            if self._worker_stop.is_set():
+                return
             if not_ready:
-                self._set_state('failed', not_ready)
+                self._kill_launch('the stack never became ready; the launch tree is '
+                                  'torn down rather than left running')
+                self._set_state('failed', not_ready, epoch=epoch)
                 return
 
             if profile['mission_driver'] == 'nav2':
@@ -1386,16 +1705,25 @@ class Gateway:
                 # mode+arm and runs before every mission instead, because its
                 # stop() disarms.
                 refusal = self.driver.prepare(self.spawn_map, self.prepare_record)
+                if self._worker_stop.is_set():
+                    return
                 if refusal:
                     outcome, detail = refusal
-                    self._set_state('failed', f'{outcome}: {detail}')
+                    self._kill_launch(f'prepare refused ({outcome}); the launch tree '
+                                      'is torn down rather than left running')
+                    self._set_state('failed', f'{outcome}: {detail}', epoch=epoch)
                     return
+            if self._worker_stop.is_set():
+                return
             self.prepared = True
-            self._set_state('ready', 'stack up and prepared to accept a goal')
+            self._set_state('ready', 'stack up and prepared to accept a goal',
+                            epoch=epoch)
             self._service_loop()
         except Exception:                               # noqa: BLE001 - reported
             traceback.print_exc()
-            self._set_state('failed', traceback.format_exc())
+            self._kill_launch('the bring-up worker raised; the launch tree is torn '
+                              'down rather than left running')
+            self._set_state('failed', traceback.format_exc(), epoch=epoch)
 
     def _service_loop(self) -> None:
         """
@@ -1430,22 +1758,56 @@ class Gateway:
                 self.broadcast_stack()
 
     # -- stop -----------------------------------------------------------------
-    def stop_stack(self) -> dict:
+    def stop_stack(self, body: 'dict | None' = None) -> dict:
+        """
+        Tear the stack down, whatever state it is in.
+
+        Refuses only two things: there is nothing to stop, and a stop is
+        already running. A mission still refuses by default, but `force`
+        cancels it and proceeds - that is the only exit from a wedged
+        `mission_active` after the service loop has already gone.
+        """
+        body = body or {}
+        force = bool(body.get('force'))
+        notes = []
         with self.lock:
             if self.state == 'idle':
                 return {'accepted': False, 'message': 'no stack is running'}
-            if self.mission is not None:
+            if self.state == 'stopping':
+                return {'accepted': False,
+                        'message': 'a stop is already in progress'}
+            if self.mission is not None and not force:
                 return {'accepted': False,
                         'message': 'a mission is running; cancel it before stopping '
-                                   'the stack'}
+                                   'the stack, or send {"force": true}'}
+            # Every pending worker write is dropped from this instant.
+            self._epoch += 1
+            orphan_pgid = self._orphan_pgid
+            self._audit('stop', f'stop requested (force={force})')
             self._set_state('stopping', 'stopping the stack')
         try:
+            if self.mission is not None and force:
+                self.cancel_requested = True
+                waited = 0.0
+                while self.mission is not None and waited < FORCE_CANCEL_WALL:
+                    time.sleep(0.2)
+                    waited += 0.2
+                notes.append(f'a mission was running; cancel was requested and '
+                             f'{"it ended" if self.mission is None else "it did not end"} '
+                             f'within {waited:.1f} s, and the stop proceeded')
             # The service loop owns MissionNode. It has to be out of the node
             # before the node is destroyed, or spin_once runs against a
             # destroyed handle.
             self._worker_stop.set()
             if self.worker is not None and self.worker.is_alive():
                 self.worker.join(timeout=15)
+                if self.worker.is_alive():
+                    # Not fatal - the epoch guard already forbids it writing
+                    # state - but it is holding a node this stop is about to
+                    # destroy, and that must be on the record.
+                    notes.append('the bring-up worker did not exit within 15 s and '
+                                 'was abandoned')
+                    self._audit('stop', notes[-1])
             if self.driver is not None:
                 try:
                     self.driver.stop()
@@ -1456,16 +1818,11 @@ class Gateway:
                 self.mission_node.destroy_node()
             self.telemetry.detach_profile()
             if self.launch is not None:
-                try:
-                    os.killpg(os.getpgid(self.launch.pid), signal.SIGINT)
-                    self.launch.wait(timeout=20)
-                except subprocess.TimeoutExpired:
-                    os.killpg(os.getpgid(self.launch.pid), signal.SIGKILL)
-                    self.launch.wait(timeout=10)
-                except ProcessLookupError:
-                    pass
-            if self.launch_log is not None:
-                self.launch_log.close()
+                self._kill_launch('stop requested by the operator')
+            elif orphan_pgid is not None:
+                # An adopted tree: this gateway has no Popen for it, so the
+                # process group is the only handle that exists.
+                notes.append(self._kill_orphan(orphan_pgid))
         finally:
             with self.lock:
                 self.driver = None
@@ -1480,9 +1837,36 @@ class Gateway:
                 self.wall_limit_s = None
                 self.prepared = False
                 self.bringup_expected = []
+                self._orphan_pgid = None
                 self.out.reset()
                 self._set_state('idle', 'no stack running')
-        return {'accepted': True, 'message': 'stack stopped'}
+        message = 'stack stopped'
+        if notes:
+            message = f'{message}; {"; ".join(notes)}'
+        return {'accepted': True, 'message': message}
+
+    def _kill_orphan(self, pgid: int) -> str:
+        """Kill an adopted process group and report what happened, verbatim."""
+        try:
+            os.killpg(pgid, signal.SIGINT)
+        except ProcessLookupError:
+            return f'the adopted process group {pgid} was already gone'
+        waited = 0.0
+        while waited < 20.0:
+            time.sleep(0.5)
+            waited += 0.5
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                self._audit('kill', f'adopted process group {pgid} exited after SIGINT')
+                return (f'the adopted process group {pgid} exited after SIGINT '
+                        f'({waited:.1f} s)')
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self._audit('kill', f'adopted process group {pgid} needed SIGKILL')
+        return f'the adopted process group {pgid} did not stop on SIGINT and was killed'
 
     # -- mission --------------------------------------------------------------
     def start_mission(self, body: dict) -> dict:
@@ -2089,6 +2473,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(committed_grid_payload(gateway.map_yaml))
             if path == '/api/stack':
                 return self._json(gateway.stack_payload())
+            if path == '/api/stack/log':
+                return self._stack_log(urlparse(self.path).query)
             if path == '/api/runs':
                 return self._json(build_run_index(gateway.runs_dir))
             if path.startswith('/api/runs/'):
@@ -2110,7 +2496,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/stack/start':
                 return self._json(gateway.start_stack(body))
             if path == '/api/stack/stop':
-                return self._json(gateway.stop_stack())
+                return self._json(gateway.stop_stack(body))
             if path == '/api/mission/start':
                 return self._json(gateway.start_mission(body))
             if path == '/api/mission/cancel':
@@ -2140,6 +2526,14 @@ class Handler(BaseHTTPRequestHandler):
                                 'has none'}, 404)
             with open(plot, 'rb') as handle:
                 return self._bytes(handle.read(), 'image/png')
+        if rest.endswith('/bundle.txt'):
+            run_id = rest[:-len('/bundle.txt')]
+            if '/' in run_id:
+                return self._json({'message': f'no route {path}'}, 404)
+            text = build_run_bundle(self.gateway.runs_dir, run_id)
+            if text is None:
+                return self._json({'message': f'no run directory runs/{run_id}'}, 404)
+            return self._bytes(text.encode(), 'text/plain; charset=utf-8')
         run_id = rest.strip('/')
         if '/' in run_id:
             return self._json({'message': f'no route {path}'}, 404)
@@ -2147,6 +2541,29 @@ class Handler(BaseHTTPRequestHandler):
         if detail is None:
             return self._json({'message': f'no run directory runs/{run_id}'}, 404)
         return self._json(detail)
+
+    def _stack_log(self, query: str):
+        """
+        Serve the tail of the RUNNING stack's launch log, live.
+
+        The gateway holds the write handle but the child is the writer, so
+        the file is readable while the stack runs - which is what makes a
+        bring-up diagnosable without stopping it.
+        """
+        gateway = self.gateway
+        path = gateway.log_path
+        if not path or not os.path.isfile(path):
+            return self._bytes(
+                ('no stack log: this gateway has not started a stack, or its log was '
+                 'removed\n').encode(), 'text/plain; charset=utf-8', 404)
+        requested = parse_qs(query).get('tail', ['65536'])[0]
+        try:
+            limit = max(1024, min(int(requested), 1048576))
+        except ValueError:
+            limit = 65536
+        body = _tail(path, limit) or ''
+        header = f'===== {path} (last {limit} bytes) =====\n'
+        return self._bytes((header + body).encode(), 'text/plain; charset=utf-8')
 
     def _static(self, path: str):
         if self.dist_dir is None or not os.path.isdir(self.dist_dir):
@@ -2329,6 +2746,10 @@ def run(argv=None) -> int:
     rclpy.init()
     gateway = Gateway(args.repo_root, map_yaml)
     gateway.start_threads()
+    # A stack a previous gateway left running is found here, before the HTTP
+    # server exists: otherwise the first start refuses on its /clock and the
+    # first stop answers "no stack is running".
+    gateway.adopt_existing_stack()
 
     Handler.gateway = gateway
     Handler.dist_dir = os.path.join(args.repo_root, 'dashboard', 'dist')
