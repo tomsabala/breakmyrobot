@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Screen } from '../App';
 import type { Ral } from '../client/useRal';
-import type { MetricValue, RunDetail, RunEntry } from '../client/types';
+import type { MetricValue, RobotProfile, RunDetail, RunEntry } from '../client/types';
 import { C, F } from '../theme/tokens';
 import { Chevron, CopyButton, Tip, useTips } from '../ui/primitives';
 
@@ -428,6 +428,30 @@ function RunDetailView({ detail, source }: { detail: RunDetail; source: Ral['sou
             {detail.id}
           </span>
           <CopyButton text={detail.id} label="Copy id" />
+          <CopyButton
+            text={async () => {
+              const response = await fetch(`/api/runs/${encodeURIComponent(detail.id)}`
+                + '/bundle.txt');
+              if (!response.ok) {
+                throw new Error(`bundle.txt: ${response.status} `
+                  + `${(await response.text()).slice(0, 200)}`);
+              }
+              return response.text();
+            }}
+            label="Copy run log"
+          />
+          {/* Always rendered, not only as a fallback: the clipboard API does
+              not exist on a plain-HTTP origin, and a download always does. */}
+          <a
+            href={`/api/runs/${encodeURIComponent(detail.id)}/bundle.txt`}
+            download={`${detail.id}.txt`}
+            style={{
+              font: `10.5px ${F.sans}`, color: C.text2, border: `1px solid ${C.lineBright}`,
+              padding: '1px 8px', textDecoration: 'none',
+            }}
+          >
+            Download
+          </a>
         </div>
         <div style={{
           display: 'flex', gap: 16, flexWrap: 'wrap', font: `11px ${F.mono}`,
@@ -578,6 +602,42 @@ function RunDetailView({ detail, source }: { detail: RunDetail; source: Ral['sou
               );
             })}
           </div>
+        )}
+      </Section>
+
+      <Section
+        title="EVENTS"
+        sub={detail.has_events
+          ? `${detail.events?.length ?? 0}${detail.events_truncated ? ' (tail)' : ''}`
+          : 'no events.jsonl'}
+      >
+        {detail.has_events && detail.events && detail.events.length ? (
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'auto auto auto minmax(0,1fr)',
+            gap: '3px 10px', font: `10.5px ${F.mono}`, alignItems: 'baseline',
+          }}
+          >
+            {detail.events.map((event, index) => (
+              <span key={`${event.wall_utc}-${index}`} style={{ display: 'contents' }}>
+                <span style={{ color: C.text4 }}>{event.wall_utc ?? '—'}</span>
+                <span style={{ color: C.text4 }}>
+                  {event.sim_s === null || event.sim_s === undefined
+                    ? '—' : `${event.sim_s.toFixed(2)} s`}
+                </span>
+                <span>{event.topic}</span>
+                <span style={{ color: C.text3, wordBreak: 'break-all' }}>
+                  {JSON.stringify(event.payload)}
+                </span>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span style={{ font: `11px ${F.sans}`, color: C.text6 }}>
+            {detail.has_events
+              ? 'events.jsonl is present but empty'
+              : 'this run has no events.jsonl: it was produced by scripts/run_scenario.sh, '
+                + 'whose event history is the bag'}
+          </span>
         )}
       </Section>
 
@@ -859,17 +919,17 @@ function DoorwayTable({ ral, details }: {
       ['goal tolerance',
         `${reference.profiles[names[0]].goal_tolerance_m} m`,
         `${reference.profiles[names[1]].goal_tolerance_m} m`] as [string, string, string],
-      ['footprint radius',
+      ['footprint radius (circumscribed)',
         `${reference.profiles[names[0]].footprint.radius_m} m`,
         `${reference.profiles[names[1]].footprint.radius_m} m`] as [string, string, string],
-      ['body width (2r)',
-        `${(reference.profiles[names[0]].footprint.radius_m * 2).toFixed(3)} m`,
-        `${(reference.profiles[names[1]].footprint.radius_m * 2).toFixed(3)} m`] as [string, string, string],
+      ['body extent (length × width, or 2r for a disc)',
+        bodyExtent(reference.profiles[names[0]]),
+        bodyExtent(reference.profiles[names[1]])] as [string, string, string],
     ] : [],
     ...doorways.map((door) => [
       `${door.label} ${door.width_m.toFixed(2)} m`,
-      names[0] ? clearance(reference.profiles[names[0]].footprint.radius_m, door.width_m) : '',
-      names[1] ? clearance(reference.profiles[names[1]].footprint.radius_m, door.width_m) : '',
+      names[0] ? clearance(reference.profiles[names[0]], door.width_m) : '',
+      names[1] ? clearance(reference.profiles[names[1]], door.width_m) : '',
     ] as [string, string, string]),
   ];
 
@@ -897,13 +957,37 @@ function DoorwayTable({ ral, details }: {
           <span>{row[2]}</span>
         </div>
       ))}
+      <div style={{
+        padding: '6px 10px', font: `10.5px/1.5 ${F.mono}`, color: C.text4,
+      }}
+      >
+        Clearance is the gap at a ZERO crossing angle: the opening less the body&apos;s
+        extent across it (its width for a rectangle, 2r for a disc). The real swept
+        band depends on the heading the robot crosses at, which this view has no
+        value for; ral_eval/scenarios/narrow_doorway_car.yaml computes it per heading.
+      </div>
     </div>
   );
 }
 
-function clearance(radius: number, width: number): string {
-  const gap = width - radius * 2;
-  return `${gap.toFixed(3)} m clear (${(radius * 2).toFixed(3)} m body)`;
+/** What the body IS, from the shape the profile declares. */
+function bodyExtent(profile: RobotProfile): string {
+  const fp = profile.footprint;
+  if (fp.shape === 'rectangle' && fp.length_m && fp.width_m) {
+    return `${fp.length_m.toFixed(2)} × ${fp.width_m.toFixed(2)} m (rectangle)`;
+  }
+  return `${(fp.radius_m * 2).toFixed(3)} m diameter (2r, disc)`;
+}
+
+/** The dimension that limits a doorway crossing: the body ACROSS the opening. */
+function bodyAcross(profile: RobotProfile): number {
+  const fp = profile.footprint;
+  return fp.shape === 'rectangle' && fp.width_m ? fp.width_m : fp.radius_m * 2;
+}
+
+function clearance(profile: RobotProfile, width: number): string {
+  const body = bodyAcross(profile);
+  return `${(width - body).toFixed(3)} m clear (body ${body.toFixed(2)} m across)`;
 }
 
 function ReferenceView({ ral }: { ral: Ral }) {

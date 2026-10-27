@@ -137,8 +137,6 @@ changing the corresponding path.
 """
 
 import argparse
-import hashlib
-import json
 import math
 import os
 import re
@@ -154,8 +152,6 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid
 from ral_eval.frames import (
-    frames_path_for_map,
-    grid_sha256,
     load_alignment_for_map,
     quaternion_of_yaw,
     yaw_of_quaternion,
@@ -164,6 +160,13 @@ from ral_eval.grid import grid_from_pgm
 from ral_eval.mission_driver import build_driver, outcome_is_known
 from ral_eval.mission_node import MissionNode, goal_pose_stamped, injection_point
 from ral_eval.robot_profile import load_profile, profile_path
+from ral_eval.run_artifacts import (
+    build_env,
+    make_run_dir,
+    start_recorder,
+    stop_recorder,
+    write_json,
+)
 from ral_eval.scenario import ScenarioError, load_scenario, mission_poses
 from ral_interfaces.msg import FaultEvent, MissionState
 from ral_interfaces.srv import (
@@ -326,93 +329,6 @@ def twist(linear_x: float = 0.0, angular_z: float = 0.0) -> Twist:
     msg.linear.x = linear_x
     msg.angular.z = angular_z
     return msg
-
-
-def _sha256_file(path: str) -> str:
-    with open(path, 'rb') as handle:
-        return hashlib.sha256(handle.read()).hexdigest()
-
-
-# Written by docker/build_overlay.sh at image build time: the ArduPilot commit
-# the SITL binary in this image was built from. docker/ardupilot.repos pins a
-# BRANCH, so without this file a run can say which branch it meant but not
-# which code it flew.
-FIRMWARE_VERSION_PATH = '/opt/ardupilot/VERSION.txt'
-
-
-def _firmware_sha() -> 'str | None':
-    """
-    Read the ArduPilot commit this image was built from, or None when absent.
-
-    None is not a failure: an image built without the autopilot overlay has no
-    firmware, and env.json carries the source path beside this value so a
-    reader can tell "no autopilot here" from "the file was not written".
-    """
-    try:
-        with open(FIRMWARE_VERSION_PATH) as handle:
-            return handle.read().strip() or None
-    except OSError:
-        return None
-
-
-def _git_sha(cwd: str) -> str:
-    """HEAD of the repository holding the run, or a stated unknown."""
-    try:
-        result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=cwd,
-                                capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        return 'unknown (git unavailable)'
-    if result.returncode != 0:
-        return 'unknown (git unavailable)'
-    return result.stdout.strip() or 'unknown (git unavailable)'
-
-
-def _git_dirty(cwd: str) -> 'bool | None':
-    """
-    Report whether the tree has uncommitted changes; None when git is absent.
-
-    A commit SHA recorded beside uncommitted changes is a false provenance
-    claim: the code that produced the run is not the code at that commit.
-    """
-    try:
-        result = subprocess.run(['git', 'status', '--porcelain'], cwd=cwd,
-                                capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    return bool(result.stdout.strip())
-
-
-def _git_diff_sha256(cwd: str) -> 'str | None':
-    """
-    Fingerprint the uncommitted delta, so a dirty run is still identifiable.
-
-    `git_sha` alone names a commit the code did not come from. This hashes
-    `git diff HEAD` concatenated with `git status --porcelain`, which together
-    cover tracked modifications and untracked paths. None when git is absent
-    or either command fails - stated, never guessed.
-    """
-    parts = []
-    for command in (['git', 'diff', 'HEAD'], ['git', 'status', '--porcelain']):
-        try:
-            result = subprocess.run(command, cwd=cwd, capture_output=True,
-                                    text=True, timeout=30)
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        if result.returncode != 0:
-            return None
-        parts.append(result.stdout)
-    return hashlib.sha256(''.join(parts).encode()).hexdigest()
-
-
-def write_json(path: str, payload: dict) -> None:
-    """Atomic write: a reader never sees half an artifact."""
-    temporary = path + '.partial'
-    with open(temporary, 'w') as handle:
-        json.dump(payload, handle, indent=2, sort_keys=False)
-        handle.write('\n')
-    os.replace(temporary, path)
 
 
 def measure_rtf(world: str) -> str:
@@ -906,30 +822,16 @@ def run(argv=None) -> int:
     # 3. The run directory and the provenance that must exist even if the
     # stack never comes up.
     started = datetime.now(timezone.utc)
-    run_dir = os.path.join(args.runs_dir,
-                           f'{scenario["experiment_id"]}_'
-                           f'{started.strftime("%Y%m%dT%H%M%SZ")}')
     try:
-        # NOT exist_ok: the directory name resolves to one second, and a second
-        # run in the same second would leave the previous run's metrics.json
-        # and plot.png beside the new run.json.
-        os.makedirs(run_dir)
+        run_dir = make_run_dir(args.runs_dir, scenario['experiment_id'], started)
     except FileExistsError:
-        print(f'RUN DIRECTORY EXISTS: {run_dir}; a second run in the same UTC second '
-              'would mix two runs\' artifacts', file=sys.stderr, flush=True)
+        print(f'RUN DIRECTORY EXISTS under {args.runs_dir} for '
+              f'{scenario["experiment_id"]} at {started:%Y%m%dT%H%M%SZ}; a second run '
+              "in the same UTC second would mix two runs' artifacts",
+              file=sys.stderr, flush=True)
         return EXIT_SCENARIO
     shutil.copyfile(scenario_path, os.path.join(run_dir, 'scenario.yaml'))
 
-    # The alignment that belongs to THIS map, never a hardcoded filename: the
-    # copy recorded here is the one metrics.py scores every truth-vs-estimate
-    # number against, so recording a different file's contents than the one
-    # load_alignment_for_map sealed would put a constant frame offset into
-    # every one of them.
-    alignment_path = frames_path_for_map(map_yaml)
-    with open(alignment_path) as handle:
-        alignment_text = handle.read()
-    with open(profile['profile_path']) as handle:
-        profile_text = handle.read()
     # The common set plus this platform's own. A topic listed twice would make
     # `ros2 bag record` subscribe twice and double every message in the bag.
     record_topics = tuple(RECORD_TOPICS_COMMON) + tuple(
@@ -938,8 +840,6 @@ def run(argv=None) -> int:
     recorder_gate_topics = tuple(RECORDER_GATE_TOPICS_COMMON) + tuple(
         topic for topic in profile['recorder_gate_topics']
         if topic not in RECORDER_GATE_TOPICS_COMMON)
-    git_dirty = _git_dirty(args.repo_root)
-    git_sha = _git_sha(args.repo_root)
     # The scenario's own values, not defaults: `world` selects the SDF, the
     # bridge config and the truth frame; `robot` selects the profile, and with
     # it the gz model spawned and the faults that are real for it; `seed` is
@@ -955,47 +855,25 @@ def run(argv=None) -> int:
                       f'spawn_x:={initial_world[0]}',
                       f'spawn_y:={initial_world[1]}',
                       f'spawn_yaw:={initial_world[2]}']
-    write_json(os.path.join(run_dir, 'env.json'), {
-        'image_ref': args.image_ref,
-        'git_sha': f'{git_sha}+dirty' if git_dirty else git_sha,
-        'git_dirty': git_dirty,
-        'git_diff_sha256': _git_diff_sha256(args.repo_root) if git_dirty else None,
-        'ros_distro': os.environ.get('ROS_DISTRO', 'unknown'),
-        'ros_domain_id': os.environ.get('ROS_DOMAIN_ID', 'unset'),
-        'world': scenario['world'],
-        'robot': scenario['robot'],
-        'seed': scenario['seed'],
-        'map_yaml': map_yaml,
-        'map_sha256': grid_sha256(map_yaml),
-        'alignment': alignment_text,
-        'alignment_path': alignment_path,
-        # The profile's own TEXT, as `alignment` carries the alignment file's:
-        # metrics.py and plot_run.py read the robot's description out of the
-        # RUN, never out of the repository, so a profile edited after a run
-        # cannot change what that run's numbers claim to be.
-        'robot_profile': profile_text,
-        'robot_profile_path': profile['profile_path'],
-        'nav2_params_path': nav2_params,
-        'nav2_params_sha256': _sha256_file(nav2_params) if nav2_params else None,
-        # The autopilot half of the same provenance: which parameter file was
-        # fed to ardurover, and which ArduPilot source the firmware in this
-        # image was built from. docker/ardupilot.repos tracks a floating
-        # branch on purpose, so the SHA recorded here is what makes a run
-        # traceable to a build rather than to a branch name.
-        'autopilot_parm_path': autopilot_parm,
-        'autopilot_parm_sha256': _sha256_file(autopilot_parm) if autopilot_parm else None,
-        'firmware_sha': _firmware_sha(),
-        'firmware_sha_source': (f'{FIRMWARE_VERSION_PATH}, written by '
-                                'docker/build_overlay.sh'),
-        'scenario_path': scenario_path,
-        'scenario_sha256': _sha256_file(scenario_path),
-        'launch_command': launch_command,
-        'record_topics': list(record_topics),
-        'bag_qos_overrides_path': qos_overrides,
-        'bag_qos_overrides_sha256': _sha256_file(qos_overrides),
-        'gate_reference': 'docs/gate.md',
-        'created_utc': started.strftime('%Y-%m-%dT%H:%M:%SZ'),
-    })
+    # ONE assembly of env.json exists, shared with the dashboard gateway:
+    # metrics.write_metrics reads eleven of these keys by name and refuses a
+    # directory missing any, so a second copy would drift.
+    write_json(os.path.join(run_dir, 'env.json'), build_env(
+        repo_root=args.repo_root,
+        image_ref=args.image_ref,
+        world=scenario['world'],
+        robot=scenario['robot'],
+        seed=scenario['seed'],
+        map_yaml=map_yaml,
+        profile=profile,
+        scenario_path=scenario_path,
+        launch_command=launch_command,
+        record_topics=record_topics,
+        bag_qos_overrides_path=qos_overrides,
+        nav2_params_path=nav2_params,
+        autopilot_parm_path=autopilot_parm,
+        gate_reference='docs/gate.md',
+        created=started))
     print(f'--- run directory {run_dir}', flush=True)
     print(f'--- initial pose world {poses["initial"]["world"]} -> map '
           f'({initial_map[0]:.3f}, {initial_map[1]:.3f}, {initial_map[2]:.3f})', flush=True)
@@ -1101,13 +979,8 @@ def run(argv=None) -> int:
         # /initialpose, a mode change and an arming are all evidence, and
         # metrics.py windows them out by the mission window rather than by
         # never having recorded them.
-        bag_dir = os.path.join(run_dir, 'bag')
         recorder_log = open(os.path.join(run_dir, 'bag_record.log'), 'w')
-        recorder = subprocess.Popen(
-            ['ros2', 'bag', 'record', '-s', 'mcap', '-o', bag_dir, '--use-sim-time',
-             '--include-hidden-topics', '--qos-profile-overrides-path', qos_overrides,
-             *record_topics],
-            stdout=recorder_log, stderr=subprocess.STDOUT, start_new_session=True)
+        recorder = start_recorder(run_dir, record_topics, qos_overrides, recorder_log)
         unrecorded = wait_for_recorder(node, recorder_gate_topics)
         record['recorder_unsubscribed_topics'] = unrecorded
         if unrecorded:
@@ -1336,17 +1209,7 @@ def run(argv=None) -> int:
 
         # 14. The recorder FIRST: killing the stack first costs the trailing
         # messages, and SIGKILL truncates the mcap.
-        if recorder is not None:
-            try:
-                os.killpg(os.getpgid(recorder.pid), signal.SIGINT)
-                recorder.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(recorder.pid), signal.SIGKILL)
-                recorder.wait(timeout=10)
-            except ProcessLookupError:
-                pass
-        if recorder_log is not None:
-            recorder_log.close()
+        stop_recorder(recorder, recorder_log)
 
         # 15. Then the stack.
         try:

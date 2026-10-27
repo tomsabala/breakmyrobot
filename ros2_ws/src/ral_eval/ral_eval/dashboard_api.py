@@ -69,22 +69,33 @@ from xml.etree import ElementTree
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from ral_eval import frames
+from ral_eval import frames, metrics, plot_run
 from ral_eval.grid import grid_from_pgm
 from ral_eval.mission_driver import build_driver
 from ral_eval.mission_node import MissionNode, goal_pose_stamped, injection_point
 from ral_eval.robot_profile import load_profile, profile_path
+from ral_eval.run_artifacts import (
+    build_env,
+    make_run_dir,
+    start_recorder,
+    stop_recorder,
+    write_json,
+)
 from ral_eval.run_scenario import (
     CANCEL_WAIT_SIM,
     DISPATCH,
     POST_TERMINAL_SIM,
+    RECORD_TOPICS_COMMON,
+    RECORDER_GATE_TOPICS_COMMON,
     STACK_READY_WALL_LIMIT,
     _target_of,
     measure_rtf,
     occupancy_grid_from_pgm,
     preflight_goal,
     read_occupied_thresh,
+    wait_for_recorder,
 )
+from ral_eval.scenario import load_scenario
 from ral_interfaces.msg import ActiveFaults, FaultEvent, FrameAlignment, MissionState
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -102,6 +113,16 @@ import yaml
 # reason the robot popover shows one row: a selector whose other entries do not
 # exist would be a control that cannot be honoured.
 WORLD = 'ral_apartment'
+
+# WALL seconds. How long a start waits for a previous stack's /clock publisher
+# to leave the DDS graph before refusing: discovery does not forget a dead
+# publisher instantly, so a stop-then-start used to be refused for a stack
+# that no longer existed.
+CLOCK_SETTLE_WALL = 10.0
+
+# WALL seconds. How long a forced stop waits for a running mission to end
+# after requesting its cancel before tearing the stack down anyway.
+FORCE_CANCEL_WALL = 10.0
 
 # Per-topic minimum wall interval between broadcasts, in seconds. These are
 # TRANSPORT limits on streams that are sampled anyway; an event is never
@@ -392,6 +413,12 @@ def encode_grid(msg) -> dict:
 
 # -- broadcast ----------------------------------------------------------------
 
+# The topics that are EVENTS rather than samples: these are what events.jsonl
+# keeps, because `Broadcaster.latest` holds exactly one frame per topic and a
+# finished mission would otherwise have no server-side history at all.
+EVENT_TOPICS = ('mission', 'fault_event', 'active', 'stack')
+
+
 class Broadcaster:
     """
     Fan one view-model frame out to every connected browser.
@@ -407,6 +434,9 @@ class Broadcaster:
         self._clients = []
         self._last_sent = {}
         self.latest = {}
+        # Set by the gateway while a run directory is open; see
+        # Gateway._append_event. None means no run is being recorded.
+        self.event_sink = None
 
     def register(self) -> 'ClientQueue':
         client = ClientQueue()
@@ -450,6 +480,12 @@ class Broadcaster:
         frame = json.dumps({'topic': topic, 'payload': payload},
                            allow_nan=False, default=str)
         self.latest[topic] = frame
+        # The run's events.jsonl, when a run is open. Only the EVENT topics
+        # go there: `latest` keeps exactly one frame per topic, so without
+        # this append there is no server-side history of a mission at all.
+        sink = self.event_sink
+        if sink is not None and topic in EVENT_TOPICS:
+            sink(topic, payload)
         with self._lock:
             clients = list(self._clients)
         for client in clients:
@@ -840,6 +876,12 @@ def build_run_detail(runs_dir: str, run_id: str) -> 'dict | None':
     detail['log_tail'] = _tail(os.path.join(run_dir, 'launch.log'))
     detail['bag_record_log_tail'] = _tail(os.path.join(run_dir, 'bag_record.log'))
     detail['has_plot'] = os.path.isfile(os.path.join(run_dir, 'plot.png'))
+    # events.jsonl exists only for runs the GATEWAY produced: a scenario run
+    # has its bag instead. `has_events` is what lets the Inspector say which.
+    events, truncated = _read_events(os.path.join(run_dir, 'events.jsonl'))
+    detail['events'] = events
+    detail['has_events'] = events is not None
+    detail['events_truncated'] = truncated
     try:
         scenario_path = os.path.join(run_dir, 'scenario.yaml')
         if os.path.isfile(scenario_path):
@@ -872,6 +914,90 @@ def build_run_detail(runs_dir: str, run_id: str) -> 'dict | None':
         detail['partial'] = True
         detail['note'] = f'{type(exc).__name__}: {exc}'
     return detail
+
+
+# The last N lines of events.jsonl the detail route returns. A long run can
+# write tens of thousands; the file on disk is never truncated.
+EVENTS_TAIL_LINES = 2000
+
+
+def _read_events(path: str):
+    """(events, truncated) from events.jsonl, or (None, False) when absent."""
+    if not os.path.isfile(path):
+        return None, False
+    rows = []
+    bad = 0
+    with open(path) as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                bad += 1
+    if bad:
+        rows.append({'wall_utc': None, 'sim_s': None, 'topic': 'reader',
+                     'payload': {'unparsable_lines': bad}})
+    truncated = len(rows) > EVENTS_TAIL_LINES
+    return rows[-EVENTS_TAIL_LINES:], truncated
+
+
+# The whole bundle is capped so a browser copy cannot be unbounded; the cap is
+# announced in the text rather than silently applied.
+BUNDLE_LIMIT = 512 * 1024
+BUNDLE_TAIL = 64 * 1024
+
+
+def build_run_bundle(runs_dir: str, run_id: str) -> 'str | None':
+    """
+    One run's artifacts as plain text, in a fixed order, for copy-paste.
+
+    Exists so an operator can hand a whole run to someone else without a
+    shell: the same files, verbatim, with separators naming each one.
+    """
+    run_dir = os.path.join(runs_dir, run_id)
+    if not os.path.isdir(run_dir):
+        return None
+    entry = build_run_entry(run_dir)
+    parts = [
+        f'run id    {run_id}\n'
+        f'robot     {entry.get("robot")}\n'
+        f'world     {entry.get("world")}\n'
+        f'outcome   {entry.get("outcome")}\n'
+        f'exit_code {entry.get("exit_code")}\n'
+        f'directory {run_dir}\n'
+    ]
+
+    def whole(name):
+        path = os.path.join(run_dir, name)
+        if not os.path.isfile(path):
+            return None
+        with open(path, errors='replace') as handle:
+            return handle.read()
+
+    for name in ('env.json', 'run.json', 'scenario.yaml', 'events.jsonl'):
+        text = whole(name)
+        if text is not None:
+            parts.append(f'===== {name} =====\n{text}')
+    metrics_path = os.path.join(run_dir, 'metrics.json')
+    if os.path.isfile(metrics_path):
+        try:
+            document = _read_json(metrics_path)
+            parts.append('===== metrics.json (metrics block) =====\n'
+                         + json.dumps(document.get('metrics'), indent=2) + '\n')
+        except ValueError as exc:
+            parts.append(f'===== metrics.json =====\nunreadable: {exc}\n')
+    for name in ('launch.log', 'bag_record.log'):
+        tail = _tail(os.path.join(run_dir, name), BUNDLE_TAIL)
+        if tail is not None:
+            parts.append(f'===== {name} (last {BUNDLE_TAIL} bytes) =====\n{tail}\n')
+    body = ''.join(parts)
+    if len(body) > BUNDLE_LIMIT:
+        body = (body[:BUNDLE_LIMIT]
+                + f'\n===== TRUNCATED at {BUNDLE_LIMIT} bytes; full artifacts in '
+                  f'{run_dir} =====\n')
+    return body
 
 
 def world_geometry(world: str) -> dict:
@@ -1177,7 +1303,8 @@ class Gateway:
             grid = occupancy_grid_from_pgm(self.map_yaml)
             preflight = preflight_goal(grid, spawn_map,
                                        float(profile['footprint']['radius_m']),
-                                       occupied_thresh)
+                                       occupied_thresh,
+                                       footprint=profile['footprint'])
             if not preflight['ok']:
                 return {'accepted': False,
                         'outcome': 'runner:not_sent:initial_pose_occupied',
@@ -1376,8 +1503,12 @@ class Gateway:
                         'message': f'goal must carry finite x and y in the gz world '
                                    f'frame ({exc})'}
             timeout_sec = float(body.get('timeout_sec', DEFAULT_TIMEOUT_SEC))
-            experiment_id = (f'ui_{self.robot}_'
-                             f'{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")}')
+            record_bag = bool(body.get('record', False))
+            # Lower case and no stamp, because this string is written into the
+            # run's scenario.yaml and ral_eval.scenario accepts [a-z0-9_] only
+            # (scenario.py:377-383). The UTC stamp lives where every measured
+            # run keeps it: in the run DIRECTORY name.
+            experiment_id = f'ui_{self.robot}'
             self.cancel_requested = False
             self.mission = {'experiment_id': experiment_id,
                             'goal_world': [x, y, yaw], 'timeout_sec': timeout_sec}
@@ -1385,11 +1516,13 @@ class Gateway:
             # _service_loop for why no second thread is started here.
             self.pending_mission = {'x': x, 'y': y, 'yaw': yaw,
                                     'timeout_sec': timeout_sec,
-                                    'experiment_id': experiment_id}
+                                    'experiment_id': experiment_id,
+                                    'record_bag': record_bag}
             self.broadcast_stack()
             return {'accepted': True, 'experiment_id': experiment_id,
                     'message': 'goal pre-flighted and sent through the mission driver; '
-                               'watch /mission_state for what the stack did with it'}
+                               'watch /mission_state for what the stack did with it'
+                               + (' (bag + metrics requested)' if record_bag else '')}
 
     def cancel_mission(self) -> dict:
         if self.mission is None:
@@ -1399,7 +1532,142 @@ class Gateway:
                 'message': 'cancel requested; a cancel is terminal only when the stack '
                            'reports one'}
 
-    def _run_mission(self, x, y, yaw, timeout_sec, experiment_id) -> None:
+    def _open_run(self, run_dir: str, experiment_id: str, started, goal_world,
+                  timeout_sec: float) -> 'str | None':
+        """
+        Write this mission's inputs into an already-created run directory.
+
+        Returns a refusal string, or None. The scenario document is written
+        FIRST and then loaded back through ral_eval.scenario: a dashboard run
+        that cannot be replayed with scripts/run_scenario.sh is not a run, and
+        finding that out after the robot has moved is too late.
+        """
+        scenario_path = os.path.join(run_dir, 'scenario.yaml')
+        spawn = self.spawn or {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        document = {
+            'experiment_id': experiment_id,
+            'robot': self.robot,
+            'world': WORLD,
+            'seed': self.seed,
+            'initial_pose': {'x': spawn['x'], 'y': spawn['y'], 'yaw': spawn['yaw']},
+            'goal': {'x': goal_world[0], 'y': goal_world[1], 'yaw': goal_world[2]},
+            'timeout_sec': timeout_sec,
+            # Empty on purpose: an operator injects faults by hand, so this
+            # run has no SCHEDULE. What was actually injected is in
+            # events.jsonl and in run.json's `interventions`.
+            'interventions': [],
+        }
+        with open(scenario_path, 'w') as handle:
+            handle.write(
+                '# Written by the dashboard gateway from one operator mission.\n'
+                '# It is a valid scenario document: `scripts/run_scenario.sh` can\n'
+                '# replay this mission unattended. `interventions` is empty because\n'
+                '# the operator injected faults by hand; events.jsonl records what\n'
+                '# was actually injected, and when.\n')
+            yaml.safe_dump(document, handle, sort_keys=False)
+        try:
+            load_scenario(scenario_path)
+        except Exception as exc:                        # noqa: BLE001 - reported
+            return (f'the run\'s own scenario.yaml does not validate, so this mission '
+                    f'would not be replayable: {exc}')
+        write_json(os.path.join(run_dir, 'env.json'), build_env(
+            repo_root=self.repo_root,
+            image_ref=os.environ.get('RAL_IMAGE', 'unknown (not run from scripts/)'),
+            world=WORLD,
+            robot=self.robot,
+            seed=self.seed,
+            map_yaml=self.map_yaml,
+            profile=self.profile,
+            scenario_path=scenario_path,
+            # The command that launched the stack this mission runs on, so
+            # provenance names the stack that is actually running.
+            launch_command=self.launch_command or [],
+            record_topics=self._record_topics(),
+            bag_qos_overrides_path=self._qos_overrides_path(),
+            nav2_params_path=(os.path.join(get_package_share_directory('ral_bringup'),
+                                           'config', 'nav2_roomba.yaml')
+                              if self.profile['mission_driver'] == 'nav2' else None),
+            autopilot_parm_path=(os.path.join(get_package_share_directory('ral_bringup'),
+                                              'config', self.profile['autopilot_parm'])
+                                 if self.profile.get('autopilot_parm') else None),
+            gate_reference='docs/gate.md',
+            created=started))
+        self._run_interventions = []
+        self.event_log = open(os.path.join(run_dir, 'events.jsonl'), 'a')
+        self.out.event_sink = self._append_event
+        return None
+
+    def _record_topics(self) -> list:
+        """Return the common recorded set plus this platform's own, deduplicated."""
+        return list(RECORD_TOPICS_COMMON) + [
+            topic for topic in self.profile['record_topics']
+            if topic not in RECORD_TOPICS_COMMON]
+
+    def _qos_overrides_path(self) -> str:
+        """Return the recorder's QoS overrides, from ral_eval's share directory."""
+        return os.path.join(get_package_share_directory('ral_eval'), 'config',
+                            'bag_qos_overrides.yaml')
+
+    def _append_event(self, topic: str, payload) -> None:
+        """
+        One line of events.jsonl, flushed: a wedged run still has its log.
+
+        The payload is the SAME encoded dict the browser received, so the
+        file and the console cannot disagree about what was reported.
+        """
+        handle = self.event_log
+        if handle is None:
+            return
+        try:
+            sim_s = self.telemetry.sim_now()
+            handle.write(json.dumps({
+                'wall_utc': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'sim_s': sim_s,
+                'topic': topic,
+                'payload': payload,
+            }, default=str) + '\n')
+            handle.flush()
+            # run.json's `interventions` is what the operator ACTUALLY
+            # injected, observed on /fault_events - a dashboard run has no
+            # schedule to copy, so this is the only honest source for it.
+            if topic == 'fault_event' and isinstance(payload, dict):
+                self._run_interventions.append({
+                    'id': payload.get('id'),
+                    'type': payload.get('kind'),
+                    'state': payload.get('state'),
+                    'injection_point': payload.get('injection_point'),
+                    'target': payload.get('target'),
+                    'at_sec': None,
+                    'dispatched_sim_s': payload.get('stamp_sim_s'),
+                    'result': payload.get('state'),
+                    'service': None,
+                    'params': None,
+                    'message': payload.get('detail'),
+                    'source': 'observed on /fault_events; the operator injected it by '
+                              'hand, so there is no scheduled at_sec, service or '
+                              'parameter block to record',
+                })
+        except Exception:                               # noqa: BLE001 - reported
+            traceback.print_exc()
+
+    def _close_run(self, run_dir, record: dict, started) -> None:
+        """Write run.json and close events.jsonl. Always runs."""
+        self.out.event_sink = None
+        if self.event_log is not None:
+            try:
+                self.event_log.close()
+            except Exception:                           # noqa: BLE001 - reported
+                traceback.print_exc()
+            self.event_log = None
+        if run_dir is None:
+            return
+        record['interventions'] = list(self._run_interventions)
+        record['finished_utc'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        record['started_utc'] = started.strftime('%Y-%m-%dT%H:%M:%SZ')
+        write_json(os.path.join(run_dir, 'run.json'), record)
+
+    def _run_mission(self, x, y, yaw, timeout_sec, experiment_id,
+                     record_bag=False) -> None:
         """
         One operator mission, on the thread that already spins MissionNode.
 
@@ -1407,7 +1675,8 @@ class Gateway:
         (an operator injects faults by hand) and plus an operator cancel. The
         terminal resolution, the wordings and the wall deadlock guard are the
         runner's, so a mission driven from the browser ends the same way the
-        same mission ends under run_scenario.
+        same mission ends under run_scenario - and now leaves the same
+        artifacts behind, so it can be read, compared and replayed.
         """
         node = self.mission_node
         driver = self.driver
@@ -1416,97 +1685,258 @@ class Gateway:
         goal_map = frames.world_pose_to_map(x, y, yaw, wtm)
         node.experiment_id = experiment_id
         goal_pose = goal_pose_stamped(node, goal_map)
+        started = datetime.now(timezone.utc)
+        run_dir = None
+        record = {
+            'experiment_id': experiment_id,
+            'run_dir': None,
+            'scenario_path': None,
+            'started_utc': started.strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'finished_utc': None,
+            'sim_start': node.sim_now(),
+            'sim_end': None,
+            't_accept_sim': None,
+            't_terminal_sim': None,
+            'goal_uuid': None,
+            'goal_map': list(goal_map),
+            'goal_world': [x, y, yaw],
+            'initial_map': list(self.spawn_map or []),
+            'initial_world': ([self.spawn['x'], self.spawn['y'], self.spawn['yaw']]
+                              if self.spawn else None),
+            'world_to_map': list(wtm),
+            'world_to_ekf_local': None,
+            # The gateway does not run the recorder gate unless recording was
+            # asked for; null means "not measured", never "none missing".
+            'recorder_unsubscribed_topics': None,
+            # Not measured on this path: bumper liveness is probed by the
+            # runner before a measured run, and the gateway has no equivalent
+            # pre-mission probe.
+            'bumper_liveness': None,
+            'initial_yaw_aligned': None,
+            'initial_yaw_error_rad': None,
+            'initial_yaw_detail': None,
+            'localization_converged': None,
+            'localization_cov_trace': None,
+            'localization_converged_sim_s': None,
+            'localization_detail': None,
+            'warmup_total_sim_s': None,
+            # The spawn pose check this stack was started with, kept verbatim.
+            'preflight_initial': self.spawn_preflight,
+            'preflight': None,
+            'mission_state': None,
+            'outcome': None,
+            'mission_driver': profile['mission_driver'],
+            'nav2_status_code': None,
+            'nav2_status_name': None,
+            'detail': None,
+            'interventions': [],
+            # The last few /world/<world>/stats readings this gateway took,
+            # newest last; each reading is itself a comma-joined triple.
+            'rtf_samples': ('; '.join(self._rtf_recent) if self._rtf_recent
+                            else 'not measured'),
+            'bag_dir': None,
+            'exit_code': None,
+            'source': 'dashboard gateway: an operator mission, not a scheduled run',
+        }
+        try:
+            # The directory is made HERE, so that a failure while writing the
+            # inputs still leaves a run whose run.json carries the traceback.
+            run_dir = make_run_dir(self.runs_dir, experiment_id, started)
+            record['run_dir'] = run_dir
+            record['scenario_path'] = os.path.join(run_dir, 'scenario.yaml')
+            record['bag_dir'] = os.path.join(run_dir, 'bag') if record_bag else None
+            refusal = self._open_run(run_dir, experiment_id, started, (x, y, yaw),
+                                     timeout_sec)
+            if refusal:
+                record['mission_state'] = MissionState.STATE_REJECTED
+                record['outcome'] = 'runner:not_sent:scenario_invalid'
+                record['detail'] = refusal
+                node.publish_mission_state(MissionState.STATE_REJECTED, goal_pose,
+                                           outcome='runner:not_sent:scenario_invalid',
+                                           detail=refusal)
+                return
+            self._run_mission_body(node, driver, profile, goal_pose, goal_map,
+                                   timeout_sec, record, run_dir, record_bag)
+        except Exception:                               # noqa: BLE001 - reported
+            traceback.print_exc()
+            record['outcome'] = record['outcome'] or 'runner:exception'
+            record['detail'] = traceback.format_exc()
+        finally:
+            record['sim_end'] = node.sim_now()
+            self._close_run(run_dir, record, started)
 
+    def _run_mission_body(self, node, driver, profile, goal_pose, goal_map,
+                          timeout_sec, record, run_dir, record_bag) -> None:
+        """Run the mission, filling run.json's fields in as they are measured."""
         node.publish_mission_state(
             MissionState.STATE_IDLE, goal_pose,
-            detail='stack up, goal not yet sent; `goal` is the goal that will be '
-                   'sent; this mission is driven by the dashboard and is NOT '
-                   'recorded as a run')
+            detail=f'stack up, goal not yet sent; `goal` is the goal that will be '
+                   f'sent; artifacts for this mission are being written to {run_dir}')
 
         grid = node.grid if node.grid is not None else occupancy_grid_from_pgm(
             self.map_yaml)
         occupied_thresh = read_occupied_thresh(self.map_yaml)
         preflight = preflight_goal(grid, goal_map,
                                    float(profile['footprint']['radius_m']),
-                                   occupied_thresh)
+                                   occupied_thresh,
+                                   footprint=profile['footprint'])
+        record['preflight'] = preflight
         if not preflight['ok']:
             # The ONLY path to `unreachable`: a pre-flight refusal, never an
             # inference from a stack abort (C8).
+            outcome = f'runner:{preflight["outcome"]}'
+            record['mission_state'] = MissionState.STATE_UNREACHABLE
+            record['outcome'] = outcome
+            record['detail'] = preflight['detail']
             node.publish_mission_state(
                 MissionState.STATE_UNREACHABLE, goal_pose,
-                outcome=f'runner:{preflight["outcome"]}', detail=preflight['detail'])
+                outcome=outcome, detail=preflight['detail'])
             return
 
         if profile['mission_driver'] == 'mavros_guided':
             # stop() disarms this platform, so GUIDED + arm is per mission.
             refusal = driver.prepare(self.spawn_map, self.prepare_record)
+            record.update(self.prepare_record)
             if refusal:
                 outcome, detail = refusal
+                record['mission_state'] = MissionState.STATE_REJECTED
+                record['outcome'] = outcome
+                record['detail'] = detail
                 node.publish_mission_state(MissionState.STATE_REJECTED, goal_pose,
                                            outcome=outcome, detail=detail)
                 return
 
-        record = dict(self.prepare_record)
-        accepted, outcome, detail = driver.send_goal(goal_pose, record)
-        if not accepted:
-            node.publish_mission_state(MissionState.STATE_REJECTED, goal_pose,
-                                       outcome=outcome, detail=detail)
-            return
-
-        t_accept = node.sim_now()
-        node.publish_mission_state(MissionState.STATE_GOAL_ACCEPTED, goal_pose,
-                                   detail=detail)
-        navigating_published = False
-        canceled = False
-        cancel_deadline = None
-        stalled = False
-        # Wall deadlock guard ONLY, as in the runner: ten times the sim budget
-        # plus two minutes, so it can fire only when /clock stopped advancing.
-        wall_deadline = time.monotonic() + timeout_sec * 10.0 + 120.0
-        last_sim = node.sim_now()
-        while rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.02)
-            driver.spin_once()
-            if driver.terminal() is not None:
-                break
-            if not navigating_published and driver.navigating_since is not None:
-                navigating_published = True
+        recorder = None
+        recorder_log = None
+        try:
+            if record_bag:
+                # The GATE first: without it the first seconds are missing
+                # from the bag and every metric built on them is quietly
+                # smaller than the run it describes.
                 node.publish_mission_state(
-                    MissionState.STATE_NAVIGATING, goal_pose,
-                    detail='the stack was observed executing the goal at sim '
-                           f'{driver.navigating_since:.2f} s')
-            elapsed = node.sim_now() - t_accept
-            last_sim = node.sim_now()
-            if not canceled and (elapsed >= timeout_sec or self.cancel_requested):
-                reason = 'operator' if self.cancel_requested else 'timeout'
-                driver.request_cancel(reason)
-                canceled = True
-                cancel_deadline = node.sim_now() + CANCEL_WAIT_SIM
-            if canceled and node.sim_now() > cancel_deadline:
-                break
-            if time.monotonic() > wall_deadline:
-                stalled = True
-                break
+                    MissionState.STATE_IDLE, goal_pose,
+                    detail='starting the recorder and waiting for it to subscribe '
+                           'before the goal is sent')
+                recorder_log = open(os.path.join(run_dir, 'bag_record.log'), 'w')
+                recorder = start_recorder(run_dir, self._record_topics(),
+                                          self._qos_overrides_path(), recorder_log)
+                gate = list(RECORDER_GATE_TOPICS_COMMON) + [
+                    topic for topic in profile['recorder_gate_topics']
+                    if topic not in RECORDER_GATE_TOPICS_COMMON]
+                unrecorded = wait_for_recorder(node, gate)
+                record['recorder_unsubscribed_topics'] = unrecorded
 
-        terminal = driver.terminal()
-        if terminal is not None:
-            state, outcome, detail = terminal
-        elif stalled:
-            state = MissionState.STATE_UNKNOWN
-            outcome = 'runner:unknown:clock_stalled'
-            detail = (f'{driver.no_terminal_detail()}; /clock stopped advancing: last '
-                      f'sim time seen {last_sim:.2f} s after '
-                      f'{timeout_sec * 10.0 + 120.0:.0f} s wall, and the stack was '
-                      f'{"asked to stop" if canceled else "not asked to stop"}')
-        else:
-            state = MissionState.STATE_UNKNOWN
-            outcome = 'runner:unknown:no_terminal_status'
-            detail = (f'{driver.no_terminal_detail()}; no terminal result arrived '
-                      + (f'within {CANCEL_WAIT_SIM:.0f} s sim of the cancel'
-                         if canceled else 'and the mission loop ended'))
-        node.publish_mission_state(state, goal_pose, outcome=outcome, detail=detail)
-        node.spin_sim(POST_TERMINAL_SIM)
-        driver.stop()
+            record.update(self.prepare_record)
+            accepted, outcome, detail = driver.send_goal(goal_pose, record)
+            if not accepted:
+                record['mission_state'] = MissionState.STATE_REJECTED
+                record['outcome'] = outcome
+                record['detail'] = detail
+                node.publish_mission_state(MissionState.STATE_REJECTED, goal_pose,
+                                           outcome=outcome, detail=detail)
+                return
+
+            t_accept = node.sim_now()
+            record['t_accept_sim'] = t_accept
+            node.publish_mission_state(MissionState.STATE_GOAL_ACCEPTED, goal_pose,
+                                       detail=detail)
+            navigating_published = False
+            canceled = False
+            cancel_deadline = None
+            stalled = False
+            # Wall deadlock guard ONLY, as in the runner: ten times the sim
+            # budget plus two minutes, so it can fire only when /clock stopped
+            # advancing.
+            wall_deadline = time.monotonic() + timeout_sec * 10.0 + 120.0
+            last_sim = node.sim_now()
+            while rclpy.ok():
+                rclpy.spin_once(node, timeout_sec=0.02)
+                driver.spin_once()
+                if driver.terminal() is not None:
+                    break
+                if not navigating_published and driver.navigating_since is not None:
+                    navigating_published = True
+                    node.publish_mission_state(
+                        MissionState.STATE_NAVIGATING, goal_pose,
+                        detail='the stack was observed executing the goal at sim '
+                               f'{driver.navigating_since:.2f} s')
+                elapsed = node.sim_now() - t_accept
+                last_sim = node.sim_now()
+                if not canceled and (elapsed >= timeout_sec or self.cancel_requested):
+                    reason = 'operator' if self.cancel_requested else 'timeout'
+                    driver.request_cancel(reason)
+                    canceled = True
+                    cancel_deadline = node.sim_now() + CANCEL_WAIT_SIM
+                if canceled and node.sim_now() > cancel_deadline:
+                    break
+                if time.monotonic() > wall_deadline:
+                    stalled = True
+                    break
+
+            # The driver writes into `prepare_record` - that is the dict it was
+            # BUILT with, because the gateway builds one driver per stack and
+            # not one per mission - and everything it measures WHILE DRIVING
+            # lands there after the snapshot taken before send_goal. Without
+            # this second merge, replan_count, replan_failures and the carrot
+            # counters are measured and then dropped from run.json, which is
+            # the artifact that is supposed to carry them. The driver clears
+            # its own per-mission keys in send_goal, so this cannot carry a
+            # previous mission's counts into this one.
+            record.update(self.prepare_record)
+
+            terminal = driver.terminal()
+            if terminal is not None:
+                state, outcome, detail = terminal
+            elif stalled:
+                state = MissionState.STATE_UNKNOWN
+                outcome = 'runner:unknown:clock_stalled'
+                detail = (f'{driver.no_terminal_detail()}; /clock stopped advancing: '
+                          f'last sim time seen {last_sim:.2f} s after '
+                          f'{timeout_sec * 10.0 + 120.0:.0f} s wall, and the stack was '
+                          f'{"asked to stop" if canceled else "not asked to stop"}')
+            else:
+                state = MissionState.STATE_UNKNOWN
+                outcome = 'runner:unknown:no_terminal_status'
+                detail = (f'{driver.no_terminal_detail()}; no terminal result arrived '
+                          + (f'within {CANCEL_WAIT_SIM:.0f} s sim of the cancel'
+                             if canceled else 'and the mission loop ended'))
+            record['mission_state'] = state
+            record['outcome'] = outcome
+            record['detail'] = detail
+            record['t_terminal_sim'] = node.sim_now()
+            node.publish_mission_state(state, goal_pose, outcome=outcome, detail=detail)
+            node.spin_sim(POST_TERMINAL_SIM)
+            driver.stop()
+        finally:
+            if recorder is not None:
+                stop_recorder(recorder, recorder_log)
+        if record_bag:
+            self._score_run(run_dir, record, goal_pose)
+
+    def _score_run(self, run_dir: str, record: dict, goal_pose) -> None:
+        """
+        metrics.json and plot.png, on the mission thread, failures recorded.
+
+        An exception here must NOT escape: the bag is the expensive artifact
+        and a failed metrics pass must not lose it. The operator is told the
+        stack is briefly busy first, because this blocks the service loop.
+        """
+        node = self.mission_node
+        node.publish_mission_state(
+            record['mission_state'], goal_pose, outcome=record['outcome'],
+            detail=f'{record["detail"]} | computing metrics.json and plot.png from the '
+                   f'bag in {run_dir}; the stack is briefly busy')
+        # run.json has to exist before write_metrics reads it.
+        write_json(os.path.join(run_dir, 'run.json'), record)
+        for label, action in (('metrics', lambda: metrics.write_metrics(run_dir)),
+                              ('plot', lambda: plot_run.write_plot(run_dir))):
+            try:
+                action()
+            except Exception as exc:                    # noqa: BLE001 - recorded
+                traceback.print_exc()
+                record['detail'] = (f'{record["detail"]} | {label} failed: '
+                                    f'{type(exc).__name__}: {exc}; the bag is intact '
+                                    f'in {run_dir}/bag')
 
     # -- faults ---------------------------------------------------------------
     def _client_for(self, service_name: str, service_type):

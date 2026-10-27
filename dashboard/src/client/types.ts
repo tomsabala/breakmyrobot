@@ -123,7 +123,10 @@ export interface GridMsg {
 export interface BringupRow { topic: string; seen: boolean; at_wall_s: number | null }
 
 export interface StackMsg {
-  state: 'idle' | 'starting' | 'ready' | 'failed' | 'stopping';
+  /** `crashed`: the launch process exited on its own and was reaped.
+   *  `orphaned`: a stack a PREVIOUS gateway started is still running; this
+   *  gateway can stop it and nothing else. */
+  state: 'idle' | 'starting' | 'ready' | 'failed' | 'stopping' | 'crashed' | 'orphaned';
   robot: string | null;
   world: string | null;
   seed: number;
@@ -137,6 +140,10 @@ export interface StackMsg {
   prepared: boolean;
   prepare_record: Record<string, unknown>;
   mission_active: boolean;
+  /** The launch child's pid while one exists, and its exit code once it has
+   *  one: `ready` with a dead child is the lie the watchdog exists to catch. */
+  child_pid?: number | null;
+  child_exit?: number | null;
   bumper_available: boolean | null;
   bumper_reason: string;
 }
@@ -180,7 +187,15 @@ export interface RobotProfile {
     max_linear_m_s: number; max_angular_rad_s: number; min_turn_radius_m: number;
     source: string;
   };
-  footprint: { radius_m: number; source: string };
+  /** `radius_m` is the CIRCUMSCRIBED radius for every shape; `length_m` and
+   *  `width_m` exist only for `shape: 'rectangle'`. */
+  footprint: {
+    shape?: 'circle' | 'rectangle';
+    length_m?: number;
+    width_m?: number;
+    radius_m: number;
+    source: string;
+  };
   goal_tolerance_m: number;
   kidnap_z_m: number;
   bringup_wall_limit_s: number;
@@ -288,6 +303,13 @@ export interface RunDetail extends RunEntry {
   goal_world?: number[];
   initial_map?: number[];
   initial_world?: number[];
+  /** Present only for runs the GATEWAY produced; a scenario run has its bag
+   *  instead. `events_truncated` says the file on disk is longer. */
+  events?: {
+    wall_utc: string | null; sim_s: number | null; topic: string; payload: unknown;
+  }[] | null;
+  has_events?: boolean;
+  events_truncated?: boolean;
 }
 
 export interface FaultResponse {

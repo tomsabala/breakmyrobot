@@ -254,9 +254,12 @@ subscriber existing rather than on a sleep.
 
 Three properties are structural rather than stylistic. A browser mission is
 driven through the **same** `MissionNode` and `MissionDriver` a measured run
-uses, so it takes the identical path and ends with the identical vocabulary; it
-deliberately writes **no run directory**, because `runs/` is the record of
-`run_scenario` output and the console says so. The browser link is labelled
+uses, so it takes the identical path and ends with the identical vocabulary,
+and it now writes its **own run directory** under `runs/ui_<robot>_<stamp>/`
+with `run.json`, `env.json`, the scenario it is equivalent to and
+`events.jsonl`; ticking "Record bag + metrics" adds the bag, `metrics.json`
+and `plot.png`, so a browser mission is auditable by the same tools as a
+scenario run. The browser link is labelled
 **"dashboard link"** everywhere and is JSON over SSE + POST, not a robotics
 protocol. And `scripts/dashboard.sh` takes the same `flock` on
 `/tmp/ral-run-$ROS_DOMAIN_ID.lock` that `scripts/run_scenario.sh` does, so a
