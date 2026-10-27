@@ -561,11 +561,17 @@ def occupancy_grid_from_pgm(map_yaml_path: str) -> OccupancyGrid:
 
 
 def preflight_goal(grid: OccupancyGrid, goal_map, robot_radius_m: float,
-                   occupied_thresh: int) -> dict:
+                   occupied_thresh: int, footprint: 'dict | None' = None) -> dict:
     """
     Decide whether a pose is worth sending, from the static map alone.
 
-    Samples every cell whose centre lies within `robot_radius_m` of the pose.
+    Samples every cell whose centre lies under the body AT THAT POSE. With no
+    `footprint` (or a circular one) the body is the disc of `robot_radius_m`,
+    which is what it has always been. With a rectangular `footprint` the body
+    is the `length_m` x `width_m` box rotated to `goal_map[2]`, which is the
+    only honest test for a car: its circumscribed disc is 1.95x its width and
+    refuses doorways the vehicle drives through.
+
     Occupied (>= `occupied_thresh`) or outside the grid means the pose cannot
     be occupied by this body and the goal is NOT sent - the mission state is
     `unreachable`, which is a pre-flight refusal and never an inference from a
@@ -590,7 +596,22 @@ def preflight_goal(grid: OccupancyGrid, goal_map, robot_radius_m: float,
     cos_o = math.cos(-oyaw)
     sin_o = math.sin(-oyaw)
 
-    radius_cells = int(math.ceil(robot_radius_m / res))
+    shape = (footprint or {}).get('shape', 'circle')
+    if shape == 'rectangle':
+        length_m = float(footprint['length_m'])
+        width_m = float(footprint['width_m'])
+        # The body's yaw in GRID coordinates: the map frame's yaw less the
+        # grid origin's own rotation, which was inverted above.
+        body_yaw = float(goal_map[2]) - oyaw
+        cos_b = math.cos(body_yaw)
+        sin_b = math.sin(body_yaw)
+        half_span_cells = int(math.ceil(math.hypot(length_m, width_m) / 2.0 / res))
+        shape_label = (f'the {length_m:.2f} x {width_m:.2f} m body at yaw '
+                       f'{float(goal_map[2]):.2f} rad')
+    else:
+        half_span_cells = int(math.ceil(robot_radius_m / res))
+        shape_label = f'{robot_radius_m} m of the goal'
+
     dx = goal_map[0] - ox
     dy = goal_map[1] - oy
     # Into grid-aligned coordinates (origin.yaw is 0 for this map, but a
@@ -605,11 +626,19 @@ def preflight_goal(grid: OccupancyGrid, goal_map, robot_radius_m: float,
     unknown = 0
     outside = 0
     sampled = 0
-    for row in range(centre_row - radius_cells, centre_row + radius_cells + 1):
-        for col in range(centre_col - radius_cells, centre_col + radius_cells + 1):
+    for row in range(centre_row - half_span_cells, centre_row + half_span_cells + 1):
+        for col in range(centre_col - half_span_cells, centre_col + half_span_cells + 1):
             cell_x = (col + 0.5) * res
             cell_y = (row + 0.5) * res
-            if math.hypot(cell_x - gx, cell_y - gy) > robot_radius_m:
+            if shape == 'rectangle':
+                rx = cell_x - gx
+                ry = cell_y - gy
+                # Into the body frame: rotate the offset by -body_yaw.
+                bx = rx * cos_b + ry * sin_b
+                by = -rx * sin_b + ry * cos_b
+                if abs(bx) > length_m / 2.0 or abs(by) > width_m / 2.0:
+                    continue
+            elif math.hypot(cell_x - gx, cell_y - gy) > robot_radius_m:
                 continue
             sampled += 1
             if not (0 <= col < info.width and 0 <= row < info.height):
@@ -630,21 +659,21 @@ def preflight_goal(grid: OccupancyGrid, goal_map, robot_radius_m: float,
     else:
         centre_status = 'the goal centre cell is itself outside the grid'
 
-    footprint = (f'{sampled} cell(s) within {robot_radius_m} m of the goal at '
-                 f'map ({goal_map[0]:.3f}, {goal_map[1]:.3f}), grid cell '
-                 f'({centre_col}, {centre_row}) of {info.width}x{info.height} at '
-                 f'{res} m: {unknown} unknown (allowed, planner allow_unknown is true), '
-                 f'{len(occupied)} occupied (>= {occupied_thresh}), {outside} outside; '
-                 f'{centre_status}')
+    footprint_detail = (f'{sampled} cell(s) under {shape_label} at '
+                        f'map ({goal_map[0]:.3f}, {goal_map[1]:.3f}), grid cell '
+                        f'({centre_col}, {centre_row}) of {info.width}x{info.height} at '
+                        f'{res} m: {unknown} unknown (allowed, planner allow_unknown is '
+                        f'true), {len(occupied)} occupied (>= {occupied_thresh}), '
+                        f'{outside} outside; {centre_status}')
 
     if outside:
         return {'ok': False, 'outcome': 'not_sent:footprint_outside_map',
-                'detail': footprint}
+                'detail': footprint_detail}
     if occupied:
         values = ', '.join(f'({c},{r})={v}' for c, r, v in occupied[:8])
         return {'ok': False, 'outcome': 'not_sent:goal_cell_occupied',
-                'detail': f'{footprint}; occupied cells: {values}'}
-    return {'ok': True, 'outcome': '', 'detail': footprint}
+                'detail': f'{footprint_detail}; occupied cells: {values}'}
+    return {'ok': True, 'outcome': '', 'detail': footprint_detail}
 
 
 def read_occupied_thresh(map_yaml_path: str) -> int:
@@ -1091,7 +1120,8 @@ def run(argv=None) -> int:
         # what every metric is scored in.
         grid = node.grid if node.grid is not None else occupancy_grid_from_pgm(map_yaml)
         preflight_initial = preflight_goal(grid, initial_map, robot_radius_m,
-                                           occupied_thresh)
+                                           occupied_thresh,
+                                           footprint=profile['footprint'])
         preflight_initial['robot_radius_m'] = robot_radius_m
         preflight_initial['robot_radius_sources'] = radius_sources
         preflight_initial['occupied_thresh'] = occupied_thresh
@@ -1129,7 +1159,8 @@ def run(argv=None) -> int:
             raise RunAbort(EXIT_OK, detail)
 
         # 9. Pre-flight. The only path to `unreachable`.
-        preflight = preflight_goal(grid, goal_map, robot_radius_m, occupied_thresh)
+        preflight = preflight_goal(grid, goal_map, robot_radius_m, occupied_thresh,
+                                   footprint=profile['footprint'])
         preflight['robot_radius_m'] = robot_radius_m
         preflight['robot_radius_sources'] = radius_sources
         preflight['occupied_thresh'] = occupied_thresh

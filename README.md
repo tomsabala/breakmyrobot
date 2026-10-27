@@ -125,7 +125,14 @@ Use established robotics software and platform-appropriate protocols where they 
 stack. `ral_roomba` is a differential-drive platform driven by Nav2 and
 localized by AMCL against the committed map; `ral_car` is an Ackermann vehicle
 driven by ArduRover SITL over MAVLink/MAVROS and localized by the autopilot's
-own EKF3, with no Nav2 and no AMCL. Which stack a scenario brings up, which gz
+own EKF3, with no AMCL and no Nav2 controller. The car does now run Nav2's
+GLOBAL planner (`map_server` + `planner_server`, `config/nav2_car.yaml`): its
+driver asks `/compute_path_to_pose` for a route that respects the body's
+rectangle and 0.611 m turning radius, follows it as sequential GUIDED
+setpoints, republishes it on `/plan`, replans every 5 s sim, and refuses a
+goal it cannot plan with `mavros:no_path`. Between replans the autopilot
+steers straight at its current setpoint and has NO reactive avoidance.
+Which stack a scenario brings up, which gz
 model it spawns, what its estimate IS and which faults are real for it all come
 from one file per platform, `ros2_ws/src/ral_bringup/config/robots/<robot>.yaml`.
 
@@ -146,10 +153,10 @@ The two-robot acceptance scenario is the `narrow_doorway_roomba` /
 after the car's rear-wheel actuator was resized to make its configured 1.0 m/s
 reachable and its aim point recentred between the two gaps: **both platforms
 complete it**. The Roomba plans around the geometry and finishes 0.11 m from
-the goal; the car, which has no planner and drives straight at its target,
-threads wall A at y = 4.10 and wall B's 0.70 m doorway at y = 3.07 with no
-contact at all, and stops 1.40 m short of the goal — the resolution of its own
-arrival rule, not an obstacle.
+the goal; the car threads wall A at y = 4.10 and wall B's 0.70 m doorway at
+y = 3.07 with no contact at all, and stops 1.40 m short of the goal — the
+resolution of its own arrival rule, not an obstacle. (That pair was measured
+before the car had a planner; it drove straight at its target.)
 
 That is a measured result that contradicts the earlier expectation, which was
 that the car would stall against wall B; the earlier run did, with a 35 rad/s
@@ -157,10 +164,46 @@ actuator and an aim point 0.10 m off the gap centre. The platforms are still
 genuinely different, and the difference is measured rather than asserted: the
 car cannot rotate in place, carries a 0.611 m minimum turning radius
 (`car_nav_check` check 9 measures what each mission actually demanded), has no
-path planner and no obstacle avoidance, and stops where a quantised `wp_dist`
-plus an estimate-side gate let it. The doorway was NOT narrowed to restore the
-old outcome: `ral_apartment.sdf` is the world both robots' committed maps and
-baselines belong to.
+LOCAL controller and no obstacle avoidance, and stops where a quantised
+`wp_dist` plus an estimate-side gate let it. The doorway was NOT narrowed to
+restore the old outcome: `ral_apartment.sdf` is the world both robots'
+committed maps and baselines belong to.
+
+**What the car's planner changed, and what it did not.** MEASURED on
+`baseline_car` (straight corridor, (1.0, 4.0) -> (6.5, 4.0)): it plans a
+7-waypoint, 5.55 m route and arrives, `goal_pose_error_m` 0.553-0.574 over
+three runs with 0 collisions. MEASURED on a route that needs a TURN,
+(1.0, 1.0) -> (6.5, 4.0): the planner returns a feasible 8-waypoint, 6.8 m
+route around wall A and the vehicle now follows it — truth
+(1.0,1.0) -> (3.1,2.2) -> (3.7,2.7) -> (3.9,3.9) -> (4.2,4.2), where the
+same mission without a planner drove into wall A and pinned at (3.70, 2.08) —
+but it then wedges in the 0.9 m doorway and ends `mavros:stalled_no_progress`
+with 2 collisions, 2.35 m from the goal. Tracking accuracy against clearance
+is the limit, not the route: there is no local controller to correct the
+cross-track error the straight-line GUIDED follower accumulates, and no
+reactive avoidance to recover from contact. The car plans a route, follows it
+in open space, and fails visibly in tight geometry.
+
+**The carrot is now checked against the body's turning circle.** Pure pursuit
+drives an arc of radius `d / (2 sin alpha)` to a candidate `d` away at heading
+error `alpha`, so a candidate inside either minimum-radius circle tangent to
+the nose is a command this body cannot obey. MEASURED before the check
+(`runs/ui_car_20261026T221042Z`, same turning route): the steering the
+commanded setpoint required averaged 30.8 deg against the plant's +/-30 deg of
+lock while the steering actually taken averaged 3.3 deg, and 143 of 338 odom
+samples carried a setpoint the body was geometrically forbidden from reaching.
+The driver now walks the carrot PAST unreachable candidates (never past the
+corridor), refuses to publish one when none is admissible, re-requests the
+plan from the current pose, and ends `mavros:carrot_unreachable` if that
+produces nothing commandable for 15 s sim. MEASURED after
+(`runs/ui_car_20261026T224207Z`): over the samples where the setpoint is more
+than 1 m away — the range in which a carrot policy decides anything, since
+pure pursuit's required radius goes to zero at any target it is standing on —
+unreachable commands fell from 18/212 to 2/242 and the p95 required steering
+from 26.7 to 20.5 deg, mean speed rose from 0.116 to 0.160 m/s, and the
+planner itself then refused 9 replans from inside the doorway with "no
+feasible path for this body and turning radius". The doorway remains the
+limit; the vehicle still ends `mavros:stalled_no_progress` there.
 
 Of the five faults, the car supports four; `scan_degradation` is REFUSED for it
 with a stated reason, because nothing in its stack consumes the lidar.

@@ -37,10 +37,13 @@
 # all three forms.
 #
 # The terminal outcome comes from the FCU's own NAV_CONTROLLER_OUTPUT.wp_dist
-# against WP_RADIUS 2.0 (ral_bringup/config/rover_ackermann.parm). wp_dist is
-# uint16 METRES, so the resolution of "arrived" on this platform is 1 m, and
-# goal_pose_error_m is reported against goal_tolerance_m + footprint radius
-# rather than against a tolerance this vehicle cannot resolve.
+# against WP_RADIUS 0.3 (ral_bringup/config/rover_ackermann.parm; it was 1.0,
+# and 2.0 before that). wp_dist is uint16 METRES, so the FCU's own half of
+# "arrived" still cannot resolve better than 1 m however small WP_RADIUS is -
+# which is why arrival is a CONJUNCTION with the runner's own estimate-side
+# gate (car.yaml arrival_estimate_tolerance_m, now 0.6 m). goal_pose_error_m
+# is reported against that gate plus the footprint rather than against a
+# tolerance this vehicle cannot resolve.
 #
 # `seed` seeds ral_faults' RNG. Nothing in this stack consumes the lidar, so on
 # this platform it governs a stream that is recorded as evidence and read by

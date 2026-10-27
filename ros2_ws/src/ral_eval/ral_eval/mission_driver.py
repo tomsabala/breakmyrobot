@@ -53,8 +53,15 @@ OUTCOMES = (
     'mavros:mode_changed:<MODE>',
     'mavros:disarmed',
     'mavros:stalled_no_progress',
+    # The plan was valid and re-requested, but no point on it lay outside this
+    # body's minimum turning circles, so no setpoint was ever published for it.
+    'mavros:carrot_unreachable',
     'mavros:canceled_timeout',
     'mavros:not_accepted:set_mode',
+    # The global planner found no feasible path for this body and turning
+    # radius, so NO setpoint was published. send_goal returns accepted=False,
+    # which MissionDriver's contract maps to STATE_REJECTED.
+    'mavros:no_path',
     'mavros:not_accepted:arming',
     'mavros:unknown:no_terminal',
     'runner:not_accepted',

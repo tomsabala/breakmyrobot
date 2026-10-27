@@ -83,7 +83,11 @@ import yaml
 # became `mission_result`; `est_pos_horiz_accuracy_max_m`, `est_status_flags`
 # and `speed_vs_target` were added for platforms with no pose covariance and
 # no velocity command. A v4 reader sees a renamed key.
-METRICS_VERSION = 5
+# 6: `plan_publications` is measured for ANY platform that publishes a path,
+# not only Nav2 ones. The car now runs a global planner and its driver
+# republishes the path it follows, so v5's blanket "this platform plans
+# inside the autopilot and publishes no path" was false for it.
+METRICS_VERSION = 6
 
 STAMP_MATCH_S = 0.05        # truth<->estimate pairing window, as in the Phase 2 harness
 CMD_ZERO_EPS = 0.01         # m/s and rad/s below which a command is "stopped"
@@ -224,6 +228,10 @@ def read_topics(profile: dict) -> list:
         # mode/armed decide every terminal outcome, and wp_dist is the FCU's
         # own distance to go.
         wanted += [TOPIC_MAVROS_STATE, TOPIC_MAVROS_NAV_OUTPUT]
+        if command.get('planner_action'):
+            # This platform plans globally even though it controls inside the
+            # autopilot, and the driver republishes the path it follows.
+            wanted.append(TOPIC_PLAN)
     else:
         raise ValueError(
             f'robot profile {profile.get("robot")!r} declares mission_driver '
@@ -1514,15 +1522,27 @@ def write_metrics(run_dir: str) -> dict:
             f'{collision_definition}{proof}')
 
     # -- plan_publications ----------------------------------------------------
-    plan_definition = (
-        f'count of {TOPIC_PLAN} messages inside the window. This is how often the '
-        'behaviour tree\'s RateController (hz=1.0) published a path, NOT a count of '
-        'replans: the BT republishes at 1 Hz with or without a fault')
-    not_nav2_plan = (f'{TOPIC_PLAN} exists only in the Nav2 stack; this platform plans '
-                     'inside the autopilot and publishes no path')
-    if not is_nav2:
+    # Measured for ANY platform that publishes a path, which since the car
+    # gained a global planner (config/nav2_car.yaml) is no longer only Nav2.
+    # What a publication MEANS differs per platform and the definition says
+    # which one produced it.
+    plans_paths = is_nav2 or bool(command_descriptor.get('planner_action'))
+    if is_nav2:
+        plan_definition = (
+            f'count of {TOPIC_PLAN} messages inside the window. This is how often the '
+            'behaviour tree\'s RateController (hz=1.0) published a path, NOT a count '
+            'of replans: the BT republishes at 1 Hz with or without a fault')
+    else:
+        plan_definition = (
+            f'count of {TOPIC_PLAN} messages inside the window. On this platform the '
+            'path comes from the global planner service and is republished by the '
+            'driver that follows it, so a publication IS a plan or replan; run.json\'s '
+            'replan_count records the driver\'s own count')
+    no_planner = (f'{TOPIC_PLAN} needs a planner; this platform plans inside the '
+                  'autopilot and publishes no path')
+    if not plans_paths:
         metrics['plan_publications'] = metric(
-            None, 'count', TOPIC_PLAN, plan_definition, not_nav2_plan)
+            None, 'count', TOPIC_PLAN, plan_definition, no_planner)
     elif status.get(TOPIC_PLAN, 'absent') != 'read':
         metrics['plan_publications'] = metric(
             None, 'count', TOPIC_PLAN, plan_definition,
@@ -1641,8 +1661,9 @@ def write_metrics(run_dir: str) -> dict:
     if not is_nav2:
         metrics['recoveries'] = metric(
             None, 'count', TOPIC_ACTION_FEEDBACK, recovery_definition,
-            f'{TOPIC_ACTION_FEEDBACK} exists only in the Nav2 stack; this platform plans '
-            'inside the autopilot and publishes no path')
+            f'{TOPIC_ACTION_FEEDBACK} exists only where a NavigateToPose action '
+            'server runs; this platform has no behaviour tree and no recovery '
+            'behaviours to count, whatever it plans with')
     elif status.get(TOPIC_ACTION_FEEDBACK, 'absent') == 'absent':
         metrics['recoveries'] = metric(
             None, 'count', TOPIC_ACTION_FEEDBACK, recovery_definition,

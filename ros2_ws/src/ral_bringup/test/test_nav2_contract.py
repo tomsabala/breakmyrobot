@@ -264,3 +264,86 @@ def test_slam_config_agrees_with_the_robot_and_the_costmaps():
     assert slam['resolution'] == local['resolution'], (
         f"map resolution {slam['resolution']} != costmap resolution "
         f"{local['resolution']}; the static layer would be resampled")
+
+
+CAR_MODEL_SDF = (Path(__file__).resolve().parents[2]
+                 / 'ral_description' / 'models' / 'ral_car' / 'model.sdf')
+
+
+@lru_cache(maxsize=None)
+def _nav2_car():
+    return yaml.safe_load((CONFIG_DIR / 'nav2_car.yaml').read_text())
+
+
+def _car_base_box():
+    """Return the car's (length, width) from base_collision in its SDF."""
+    root = ElementTree.parse(CAR_MODEL_SDF).getroot().find('model')
+    for link in root.findall('link'):
+        for collision in link.findall('collision'):
+            if collision.get('name') != 'base_collision':
+                continue
+            size = collision.find('geometry/box/size').text.split()
+            return float(size[0]), float(size[1])
+    raise AssertionError(f'no base_collision box in {CAR_MODEL_SDF}')
+
+
+def _car_footprint_polygon():
+    costmap = _nav2_car()['global_costmap']['global_costmap']['ros__parameters']
+    assert 'robot_radius' not in costmap, (
+        'nav2_car.yaml sets robot_radius; the car is a 0.50 x 0.30 m box and its '
+        'circumscribed 0.292 m disc is 1.95x its width, which cannot be planned '
+        'through the 0.70 m doorways the committed scenarios cross')
+    return yaml.safe_load(costmap['footprint'])
+
+
+def test_the_car_costmap_footprint_encloses_its_collision_box():
+    length, width = _car_base_box()
+    polygon = _car_footprint_polygon()
+    xs = [point[0] for point in polygon]
+    ys = [point[1] for point in polygon]
+    assert max(xs) >= length / 2 and -min(xs) >= length / 2, (
+        f'the costmap footprint spans x [{min(xs)}, {max(xs)}] but the body is '
+        f'{length} m long: the planner would route a body through geometry it does '
+        'not know it occupies')
+    assert max(ys) >= width / 2 and -min(ys) >= width / 2, (
+        f'the costmap footprint spans y [{min(ys)}, {max(ys)}] but the body is '
+        f'{width} m wide')
+
+
+def test_the_car_planner_respects_the_geometric_turning_radius():
+    planner = _nav2_car()['planner_server']['ros__parameters']
+    profile = yaml.safe_load((CONFIG_DIR / 'robots' / 'car.yaml').read_text())
+    plugin = planner[planner['planner_plugins'][0]]
+    assert plugin['minimum_turning_radius'] >= profile['plant']['min_turn_radius_m'], (
+        f"planner minimum_turning_radius {plugin['minimum_turning_radius']} is "
+        f"tighter than the plant's {profile['plant']['min_turn_radius_m']} m: every "
+        'path it produced would demand a turn the vehicle cannot make')
+    assert plugin['motion_model_for_search'] == 'DUBIN', (
+        'a Reeds-Shepp search plans reversing manoeuvres, and nothing in this stack '
+        'commands the car in reverse')
+
+
+def test_the_car_planner_reads_the_fault_relays_scan():
+    costmap = _nav2_car()['global_costmap']['global_costmap']['ros__parameters']
+    assert costmap['obstacle_layer']['scan']['topic'] == SCAN_TOPIC, (
+        'the car global costmap must read the relay output /scan; /scan_raw bypasses '
+        'the node sensor faults are injected into, so a degraded lidar would not '
+        'change what the only Nav2 component on this platform sees')
+    # Comments are excluded: the file EXPLAINS why /scan_raw is wrong, and a
+    # check that forbids the explanation would push the reasoning out of the
+    # file it belongs in.
+    settings = [line for line in (CONFIG_DIR / 'nav2_car.yaml').read_text().splitlines()
+                if not line.lstrip().startswith('#')]
+    for forbidden in ('ground_truth', 'base_link_truth', '/scan_raw'):
+        assert not any(forbidden in line for line in settings), (
+            f'{forbidden!r} appears in a nav2_car.yaml SETTING')
+
+
+def test_the_car_runs_no_controller_and_no_local_costmap():
+    """The autopilot is the controller; a Nav2 controller would drive nothing."""
+    document = _nav2_car()
+    assert 'controller_server' not in document
+    assert 'local_costmap' not in document
+    assert 'amcl' not in document, (
+        'this platform localizes with EKF3 inside the autopilot; an AMCL section '
+        'here would be a second estimator nothing consumes')

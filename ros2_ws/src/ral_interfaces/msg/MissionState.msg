@@ -94,9 +94,18 @@
 #                                     DETERMINISTIC no-progress policy stopped
 #                                     the vehicle; see detail. This is a
 #                                     programmed safe stop, not autonomy.
+#   mavros:carrot_unreachable         (state aborted) every candidate point on
+#                                     the planned path lay inside this body's
+#                                     minimum turning circle; no setpoint was
+#                                     published for them and the plan was
+#                                     re-requested first
 #   mavros:canceled_timeout           (state canceled) the runner's timeout;
 #                                     the driver commanded HOLD
 #   mavros:not_accepted:set_mode      (state rejected)
+#   mavros:no_path                    (state rejected) the global planner
+#                                     returned no feasible path for this body
+#                                     and turning radius, so no setpoint was
+#                                     published and the vehicle never moved
 #   mavros:not_accepted:arming        (state rejected)
 #   mavros:unknown:no_terminal        (state unknown)
 #   runner:not_accepted               (state rejected)

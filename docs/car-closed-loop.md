@@ -1,15 +1,23 @@
 # ArduRover SITL, MAVROS and the car closed loop — measured proof
 
-Measured 2026-10-25 13:47 UTC by
+Measured 2026-10-26 16:16 UTC by
 `scripts/checks/car_nav_check.sh`, which launches
 `ral_bringup/car_nav.launch.py`, puts the autopilot into `GUIDED`, arms it
 and drives one real mission to `baseline_car.yaml`'s goal. Every duration is
 sim time off `/clock`.
 
-There is no Nav2, no `map_server` and no AMCL on this platform: ArduRover
-plans and controls inside the autopilot, EKF3 estimates the pose from the IMU
-and SITL's synthesised GPS, and MAVROS is the only link between that
-autopilot and ROS. The mission therefore ends on a CONJUNCTION of two
+There is no AMCL and no Nav2 CONTROLLER on this platform: ArduRover owns
+the control loop, EKF3 estimates the pose from the IMU and SITL's
+synthesised GPS, and MAVROS is the only link between that autopilot and
+ROS. What DOES run from Nav2 is GLOBAL PLANNING only - `map_server` plus
+`planner_server` (`config/nav2_car.yaml`) - whose path
+`ral_eval/mavros_driver.py` streams to the autopilot as sequential GUIDED
+setpoints and republishes on `/plan`. Between replans the autopilot steers
+straight at its current setpoint and has NO reactive obstacle avoidance.
+This harness drives its own mission and does not use the planner, so the
+numbers below measure the autopilot link, the frames and the plant.
+
+The mission therefore ends on a CONJUNCTION of two
 things the robot itself reports: the FCU's own
 `NAV_CONTROLLER_OUTPUT.wp_dist` inside the profile's `goal_tolerance_m`
 on three consecutive messages while the mode is still `GUIDED` and the
@@ -25,16 +33,16 @@ run, re-implemented here rather than imported.
 | 0 | bring-up | PASS | one message on each of /clock, /ground_truth/odom, /scan, /mavros/state, /mavros/local_position/odom, /frame_alignment within 240 s wall |
 | 1 | autopilot link: connected, GUIDED, armed | PASS | /mavros/state connected=True, mode='GUIDED', armed=True, guided=True, manual_input=False, system_status=4 (MAV_STATE); services ready = True; set_mode: /mavros/set_mode answered mavros_msgs.srv.SetMode_Response(mode_sent=True); arming: /mavros/cmd/arming answered mavros_msgs.srv.CommandBool_Response(success=True, result=0) |
 | 2 | /scan has exactly one publisher: scan_fault_relay | PASS | /scan publishers = ['scan_fault_relay'], /scan_raw publishers = ['ros_gz_bridge']; a second publisher or a different node means lidar faults would not reach every consumer |
-| 3 | relay output equals relay input | PASS | 311 /scan and /scan_raw message(s) shared a header stamp over the whole run; 0 differed; 177 raw message(s) were never republished and 177 /scan message(s) had no matching raw (start-up artefacts of this harness joining between the relay's input and its output) |
+| 3 | relay output equals relay input | PASS | 392 /scan and /scan_raw message(s) shared a header stamp over the whole run; 0 differed; 157 raw message(s) were never republished and 157 /scan message(s) had no matching raw (start-up artefacts of this harness joining between the relay's input and its output) |
 | 4 | only the harness, the fault injector and the frame measurer subscribe to truth | PASS | /ground_truth/odom subscribers = ['car_nav_check', 'ekf_local_tf', 'fault_manager']; navigation offenders = []; not allowlisted = [] |
 | 5 | TF topology | PASS | frames = ['base_link', 'base_link_frd', 'ekf_local', 'front_left_wheel', 'front_right_wheel', 'map', 'map_ned', 'odom', 'odom_ned', 'rear_left_wheel', 'rear_right_wheel', 'rplidar_link', 'steer_left', 'steer_right', 'world']; unexpected = [], missing = [], wrong parents (got, want) = none |
-| 6 | EKF origin alignment | PASS | world -> ekf_local published at (0.9995, 3.9995, 0.0451); this harness derived (0.9995, 3.9995, 0.0451) from its own first stationary /ground_truth/odom sample (1.0000, 4.0000, -0.0000) and its own first /mavros/local_position/odom sample (0.0006, 0.0005, -0.0451); they differ by 0.0000 m and 0.0000 rad (limits 0.05 m, 0.02 rad). The comparison is this harness's own measurement, not the publisher's self-report; for reference the publisher reported residuals 0.0008 m / 0.0451 rad against the spawn pose it predicts, and its source was: /ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose |
-| 7 | mission succeeds | PASS | terminal outcome mavros:reached_wp_radius after 5.7 s sim (limit 180): /mavros/nav_controller_output/output reported wp_dist 1 m within the profile's goal_tolerance_m 1 m on 3 consecutive messages while /mavros/state reported mode GUIDED and armed, having first reported a distance beyond that tolerance, AND the robot's own estimate was 1.48 m from the commanded setpoint, within the profile's arrival_estimate_tolerance_m 1.50 |
-| 8 | goal reached in ground truth | PASS | \|final truth - goal\| in world = 1.035 m (limit 2.010 = arrival_estimate_tolerance_m 1.5 + footprint radius 0.292 + this run's measured max \|estimate - truth\| 0.218); truth world = (5.469, 3.905), goal world = (6.500, 4.000) |
-| 9 | measured minimum turning radius | PASS | min(speed / \|yaw rate\|) over truth = 48.556 m from 263 sample(s) faster than 0.3 m/s, against the profile's geometric 0.611 m (wheelbase / tan(steer limit)); the floor this check enforces is 0.305 m. This mission never demanded anything near full steering lock, so the number is a LOWER BOUND on what this body did here and NOT a measurement of the plant limit. Below the floor would mean the body turned tighter than its geometry allows - skidding, or not behaving as an Ackermann vehicle - and that is the only way this check fails. |
+| 6 | EKF origin alignment | PASS | world -> ekf_local published at (0.9990, 3.9989, 0.0455); this harness derived (0.9990, 3.9989, 0.0455) from its own first stationary /ground_truth/odom sample (1.0000, 4.0000, -0.0000) and its own first /mavros/local_position/odom sample (0.0011, 0.0010, -0.0455); they differ by 0.0000 m and 0.0000 rad (limits 0.05 m, 0.02 rad). The comparison is this harness's own measurement, not the publisher's self-report; for reference the publisher reported residuals 0.0015 m / 0.0455 rad against the spawn pose it predicts, and its source was: /ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose |
+| 7 | mission succeeds | PASS | terminal outcome mavros:reached_wp_radius after 7.1 s sim (limit 180): /mavros/nav_controller_output/output reported wp_dist 0 m within the profile's goal_tolerance_m 1 m on 3 consecutive messages while /mavros/state reported mode GUIDED and armed, having first reported a distance beyond that tolerance, AND the robot's own estimate was 0.59 m from the commanded setpoint, within the profile's arrival_estimate_tolerance_m 0.60 |
+| 8 | goal reached in ground truth | PASS | \|final truth - goal\| in world = 0.320 m (limit 1.147 = arrival_estimate_tolerance_m 0.6 + footprint radius 0.292 + this run's measured max \|estimate - truth\| 0.255); truth world = (6.259, 3.789), goal world = (6.500, 4.000) |
+| 9 | measured minimum turning radius | PASS | min(speed / \|yaw rate\|) over truth = 34.263 m from 337 sample(s) faster than 0.3 m/s, against the profile's geometric 0.611 m (wheelbase / tan(steer limit)); the floor this check enforces is 0.305 m. This mission never demanded anything near full steering lock, so the number is a LOWER BOUND on what this body did here and NOT a measurement of the plant limit. Below the floor would mean the body turned tighter than its geometry allows - skidding, or not behaving as an Ackermann vehicle - and that is the only way this check fails. |
 | 10 | no collisions during the mission | PASS | 0 debounced collision event(s) from 0 raw /bumper contact report(s), collapsed at 0.5 s sim per colliding pair. Contact path liveness: /bumper ROS publishers = ['ros_gz_bridge']; gz contact topic /world/ral_apartment/model/ral_car/link/base_link/sensor/bumper/contact is listed by `gz topic -l`. Both halves are required: a contact sensor is silent until something touches it, so a count of zero reports is only evidence when the path that would have carried them is shown to exist |
-| 11 | estimate is an estimate, not truth | PASS | max \|EKF3 estimate - truth\| = 0.2180 m, mean = 0.0875 m over 63 paired samples (required: > 0.005 so it is not truth, < 1.0 so the vehicle is localized). The estimate is ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED), read from /mavros/local_position/odom |
-| 12 | achieved speed inside the configured envelope | PASS | max achieved speed (central difference of truth) = 0.967 m/s over 310 sample(s), against 1.0 m/s configured (CRUISE_SPEED/WP_SPEED in rover_ackermann.parm, carried in the profile as plant.max_linear_m_s) x 1.2 = 1.200 m/s. This is achieved speed, not a command: ArduRover is commanded by position setpoint and its throttle output is PWM |
+| 11 | estimate is an estimate, not truth | PASS | max \|EKF3 estimate - truth\| = 0.2549 m, mean = 0.1251 m over 81 paired samples (required: > 0.005 so it is not truth, < 1.0 so the vehicle is localized). The estimate is ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED), read from /mavros/local_position/odom |
+| 12 | achieved speed inside the configured envelope | PASS | max achieved speed (central difference of truth) = 0.966 m/s over 401 sample(s), against 1.0 m/s configured (CRUISE_SPEED/WP_SPEED in rover_ackermann.parm, carried in the profile as plant.max_linear_m_s) x 1.2 = 1.200 m/s. This is achieved speed, not a command: ArduRover is commanded by position setpoint and its throttle output is PWM |
 
 ## Run
 
@@ -45,17 +53,17 @@ run, re-implemented here rather than imported.
 | Scenario | `baseline_car` |
 | Initial pose (world) | (1.0, 4.0, 0.0) |
 | Goal (world) | (6.5, 4.0, 0.0) |
-| Goal tolerance | `goal_tolerance_m` 1.0 m (`WP_RADIUS`) AND `arrival_estimate_tolerance_m` 1.5 m, footprint radius 0.292 m |
+| Goal tolerance | `goal_tolerance_m` 1.0 m (`WP_RADIUS`) AND `arrival_estimate_tolerance_m` 0.6 m, footprint radius 0.292 m |
 | Autopilot | `ardurover` SITL, `ral_bringup/config/rover_ackermann.parm` |
-| `sha256(rover_ackermann.parm)` | `196f993a0a16d6a423f24c6b1859ab9ee087de43050055bb70282f559e9255a6` |
+| `sha256(rover_ackermann.parm)` | `b7b54f1c3f48cba782eedcb68622cca7788ec8bf57e06c03271d59aff8f81fd0` |
 | `ARMING_CHECK` in force | `0` (read from the `.parm` this run was started with; `0` disables the pre-arm checks that can only fail for simulation artefacts — an RC transmitter and a battery monitor SITL does not have) |
 | Estimate | ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED), `/mavros/local_position/odom` |
-| `world_to_ekf_local` (measured this run) | x = 0.9995, y = 3.9995, yaw = 0.0451, residual = 0.0008 m |
+| `world_to_ekf_local` (measured this run) | x = 0.9990, y = 3.9989, yaw = 0.0455, residual = 0.0015 m |
 | Alignment source | /ground_truth/odom and /mavros/local_position/odom, both stationary at the spawn pose |
 | Terminal outcome | `mavros:reached_wp_radius` |
-| Mission duration | 5.70 s sim |
-| Sim time elapsed | 10.00 s |
-| Real-time factor under lockstep (`/world/ral_apartment/stats`) | 0.34378845596181612, 0.52190255400843344, 0.35357678273413856 |
+| Mission duration | 7.06 s sim |
+| Sim time elapsed | 10.95 s |
+| Real-time factor under lockstep (`/world/ral_apartment/stats`) | 1.0108749931765939, 0.999710583785994, 1.0009494005063804 |
 | Image | `sha256:4eb135c402d4930989bed15baf411ec98110d0e346f4ae9f7e7e3bb84b0a670e` |
 
 ## What these checks establish
@@ -109,7 +117,7 @@ run, re-implemented here rather than imported.
   with `WP_RADIUS` 1.0 a reported 1 means anywhere in [1, 2). That
   half alone cannot say where the vehicle came to rest, so the mission
   ends only when it is satisfied AND the robot's own estimate is within
-  `arrival_estimate_tolerance_m` (1.5 m) of the
+  `arrival_estimate_tolerance_m` (0.6 m) of the
   commanded setpoint — both terms the robot's own, truth never read.
   Check 8 is scored against that gate plus the footprint radius plus
   THIS run's measured maximum |estimate − truth|, so its limit is a sum
@@ -138,7 +146,7 @@ run, re-implemented here rather than imported.
   Roomba's covariance trace, and no convergence instant to time: EKF3
   sets its origin at the autopilot's first GPS fix with no
   operator-triggered initialization.
-- **Real-time factor under lockstep was 0.34378845596181612, 0.52190255400843344, 0.35357678273413856.**
+- **Real-time factor under lockstep was 1.0108749931765939, 0.999710583785994, 1.0009494005063804.**
   `ArduPilotPlugin`'s `<lock_step>1</lock_step>` ties the autopilot's
   clock to gz's, so the two cannot drift apart, but the pair runs only
   as fast as the slower of them. Every duration above is sim time and

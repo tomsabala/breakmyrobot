@@ -1,0 +1,113 @@
+# Nav2 parameters for ral_car in ral_apartment: GLOBAL PLANNING ONLY.
+#
+# This file deliberately configures three nodes and no more:
+#
+#   map_server      serves the committed grid the mission is scored in, so the
+#                   planner plans against the same geometry every metric uses.
+#   planner_server  a kinematically feasible global planner for a car.
+#   (lifecycle_manager, in car_nav.launch.py, transitions both.)
+#
+# THERE IS NO local_costmap AND NO controller_server, and that is not an
+# omission. ArduRover IS the controller: ral_eval/mavros_driver.py streams the
+# planned path to it as sequential GUIDED setpoints, so a Nav2 controller
+# would have nothing to command. A local costmap would also need an
+# odom-continuous frame, and the only frame named `odom` in this platform's TF
+# tree is a MAVROS NED alias (scripts/checks/car_nav_check.py:149-155) that a
+# costmap would silently bind to.
+#
+# WHY NOT EXTEND nav2_roomba.yaml: ral_bringup/test/test_nav2_contract.py pins
+# that file against the Roomba's DiffDrive envelope and its robot_radius 0.18.
+# The car is a different plant with a different body, and sharing one file
+# would make either robot's limits change the other's.
+#
+# FOOTPRINT, not robot_radius. The car's circumscribed radius is 0.292 m -
+# 1.95x its actual 0.30 m width - and a disc that size cannot be planned
+# through the 0.70 m doorways the committed scenarios cross. The polygon below
+# is the SDF's base_collision box (0.50 x 0.30 m, ral_car/model.sdf), centred
+# on base_link exactly as the collision geometry is.
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    # Overridden in launch by the `map` launch configuration.
+    yaml_filename: ""
+
+planner_server:
+  ros__parameters:
+    use_sim_time: True
+    # 1 Hz: the driver re-plans every replan_period_sim_s (5 s sim, see
+    # car.yaml command.replan_period_sim_s), so a faster server would only
+    # burn CPU the lockstep simulation needs.
+    expected_planner_frequency: 1.0
+    planner_plugins: ["CarHybrid"]
+    CarHybrid:
+      plugin: "nav2_smac_planner/SmacPlannerHybrid"
+      tolerance: 0.25
+      # The car is never commanded in reverse by this stack, so Reeds-Shepp
+      # would plan manoeuvres the driver cannot execute.
+      motion_model_for_search: "DUBIN"
+      # wheelbase 0.35 / tan(0.52), the same geometric number as
+      # car.yaml plant.min_turn_radius_m and rover_ackermann.parm TURN_RADIUS.
+      minimum_turning_radius: 0.611
+      # 5 degrees of heading resolution.
+      angle_quantization_bins: 72
+      allow_unknown: true
+      # The committed map is 0.05 m per cell and the apartment is 12 x 8 m;
+      # downsampling would coarsen the doorways this platform has to thread.
+      downsample_costmap: false
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      cost_travel_multiplier: 2.0
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      smooth_path: True
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 0.00000001
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: True
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      resolution: 0.05
+      track_unknown_space: true
+      # The SDF's base_collision box, in base_link coordinates. See the
+      # FOOTPRINT note above: robot_radius 0.292 would refuse every doorway.
+      footprint: "[[0.25,0.15],[0.25,-0.15],[-0.25,-0.15],[-0.25,0.15]]"
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          # The RELAY's output, never /scan_raw: a lidar degraded by
+          # ral_faults must degrade what the planner sees, or a sensor fault
+          # would be invisible to the one Nav2 component this platform runs.
+          topic: /scan
+          max_obstacle_height: 0.6
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 8.0
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        # Same value as the Roomba's, for the same reason: wall B's 0.70 m
+        # doorway (half-gap 0.35 m) stays costed but never lethal at the
+        # centreline. The car's half-width is 0.15 m, so the usable corridor
+        # is wider for it than for the 0.18 m-radius Roomba.
+        inflation_radius: 0.45
+      always_send_full_costmap: True

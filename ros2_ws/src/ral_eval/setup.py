@@ -50,6 +50,7 @@ setup(
             'compute_metrics = ral_eval.metrics:main',
             'plot_run = ral_eval.plot_run:main',
             'dashboard_api = ral_eval.dashboard_api:main',
+            'wait_for_frame_alignment = ral_eval.wait_for_alignment:main',
         ],
     },
 )

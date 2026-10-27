@@ -276,6 +276,68 @@ def _ekf_local_tf(context, *args, **kwargs):
         output='screen')]
 
 
+def _global_planner(context, *args, **kwargs):
+    """
+    Start map_server + planner_server, and transition them AFTER the alignment.
+
+    GLOBAL PLANNING ONLY: there is no controller_server and no local costmap,
+    because ArduRover is the controller (config/nav2_car.yaml says why).
+
+    THE GATE IS NOT A TIMER. `map -> ekf_local` does not exist until
+    ekf_local_tf has measured the EKF origin, which car.yaml:148-156 records
+    at +49.4 / +49.7 / +55.1 s wall across three runs. A costmap activated
+    before that aborts with "Timed out waiting for transform", and a fixed
+    TimerAction against a 5.7 s spread is a race. /frame_alignment is latched
+    TRANSIENT_LOCAL (ekf_local_tf.py:208-212), so waiting for one message is
+    reliable even for a late subscriber - and raising transform_tolerance to
+    paper over it is forbidden for the same reason roomba_nav.launch.py:161-165
+    gives: it would mask genuinely stale TF during fault runs.
+
+    The gate is `ral_eval wait_for_frame_alignment`, a node that subscribes
+    with the publisher's own TRANSIENT_LOCAL QoS. It replaced
+    `ros2 topic echo --once`, which MEASURED unreliable: in
+    logs/stack_car_20261026T150610Z.log the CLI exited non-zero on a healthy
+    topic, the lifecycle manager was never started, and bring-up failed with
+    "the global planner never activated".
+    """
+    bringup_share = get_package_share_directory('ral_bringup')
+    params = os.path.join(bringup_share, 'config', 'nav2_car.yaml')
+    map_yaml = LaunchConfiguration('map').perform(context)
+    return [
+        Node(
+            package='nav2_map_server',
+            executable='map_server',
+            name='map_server',
+            parameters=[params, {'use_sim_time': True, 'yaml_filename': map_yaml}],
+            output='screen'),
+        Node(
+            package='nav2_planner',
+            executable='planner_server',
+            name='planner_server',
+            parameters=[params, {'use_sim_time': True}],
+            # planner_server publishes every path it computes on `plan`. The
+            # DRIVER is what decides which of those it is actually following
+            # (it resamples and may reject one), and this project holds the
+            # same rule for /plan that it holds for /scan: exactly one
+            # publisher, so a consumer never has to guess which message is the
+            # robot's current intent. The server's own copy is kept visible
+            # under a different name for debugging.
+            remappings=[('plan', 'planner_server/plan')],
+            output='screen'),
+        ExecuteProcess(
+            cmd=['bash', '-lc',
+                 'ros2 run ral_eval wait_for_frame_alignment --timeout 300 '
+                 '|| { echo "WARNING: /frame_alignment never arrived; the global '
+                 'planner is NOT being activated, and this platform will refuse a '
+                 'goal rather than plan against a map it cannot locate itself in" '
+                 '>&2; exit 1; }; '
+                 'exec ros2 run nav2_lifecycle_manager lifecycle_manager --ros-args '
+                 '-r __node:=lifecycle_manager_car -p use_sim_time:=true '
+                 '-p autostart:=true -p "node_names:=[map_server, planner_server]"'],
+            output='screen'),
+    ]
+
+
 def generate_launch_description() -> LaunchDescription:
     bringup_share = get_package_share_directory('ral_bringup')
 
@@ -349,4 +411,5 @@ def generate_launch_description() -> LaunchDescription:
         OpaqueFunction(function=_mavros),
         OpaqueFunction(function=_stream_rates),
         OpaqueFunction(function=_ekf_local_tf),
+        OpaqueFunction(function=_global_planner),
     ])

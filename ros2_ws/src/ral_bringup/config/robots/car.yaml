@@ -32,9 +32,58 @@
 # estimate figure in metrics.json names the estimator it was measured against,
 # and that name comes from here rather than from a module constant.
 #
-# This platform runs NO Nav2 and NO AMCL. ArduRover SITL plans and controls
-# inside the autopilot, EKF3 estimates the pose, and MAVROS is the only link
-# between that autopilot and ROS.
+# This platform runs NO AMCL and NO Nav2 CONTROLLER. ArduRover SITL owns the
+# control loop and the EKF3 state estimate, and MAVROS is the only link
+# between that autopilot and ROS. What DOES run from Nav2 is global planning
+# only: map_server plus planner_server (config/nav2_car.yaml), whose path is
+# streamed to the autopilot as sequential GUIDED setpoints by
+# ral_eval/mavros_driver.py. Between replans (replan_period_sim_s below) the
+# autopilot still steers straight at its current setpoint and has NO reactive
+# obstacle avoidance of its own.
+#
+# WHAT THIS VEHICLE ACTUALLY COMPLETES, measured, not asserted:
+#
+#   * A straight corridor route (scenarios/baseline_car.yaml, (1.0, 4.0) ->
+#     (6.5, 4.0) through the doorway) USUALLY completes: over 9 measured runs
+#     8 ended mavros:reached_wp_radius with goal_pose_error_m 0.553-0.585 and
+#     collision_count 0, mean speed 0.701 m/s and p90 0.956 m/s against a
+#     1.0 m/s target. The 9th stalled: mavros:stalled_no_progress after 33.1 s
+#     sim, 1 collision, 1.20 m of goal error, 8 plan publications instead of 3
+#     (docs/repeatability-baseline_car.md). Even the easy route is not
+#     deterministic on this platform, and the spread is recorded rather than
+#     re-run away.
+#   * An unroutable goal is REFUSED before anything moves:
+#     /compute_path_to_pose returns 0 poses and the mission ends
+#     mavros:no_path with the start and goal cells quoted
+#     (runs/ui_car_20261026T152537Z).
+#   * A NEW obstacle that exists only in the lidar changes the route. A
+#     0.40 x 1.20 x 0.60 m box spawned across the corridor at world
+#     (3.0, 4.0) was marked in the global costmap by the obstacle_layer
+#     (cell value 47 at map (2.7, 3.5), against 0 before and 100 for a wall),
+#     and the next plan detoured south - (1.4,3.0) (2.4,2.6) (3.1,3.3)
+#     (4.1,3.7) over 6.06 m, against the straight 7-waypoint 5.55 m route the
+#     same goal gets in a clear corridor (runs/ui_car_20261026T163323Z). The
+#     vehicle did NOT complete that detour: it wedged at the doorway edge at
+#     world (3.70, 3.53), the same tracking limit recorded below.
+#
+#   * A route WITH A TURN is NOT completed. From (1.0, 1.0) to (6.5, 4.0) the
+#     planner returns a feasible 8-waypoint, 6.8 m route and the vehicle now
+#     TRACKS it - truth (1.0,1.0) -> (3.1,2.2) -> (3.7,2.7) -> (3.9,3.9) ->
+#     (4.2,4.2), i.e. around wall A and into the doorway, where straight-line
+#     GUIDED used to drive into the wall at (3.70, 2.08) - but it then wedges
+#     in the 0.9 m doorway and ends mavros:stalled_no_progress with
+#     collision_count 2 and 2.35 m of goal error
+#     (runs/ui_car_20261026T154830Z). Mean speed on turning routes is
+#     0.10-0.18 m/s against the 1.0 m/s target.
+#
+#     The limit is tracking accuracy against clearance, not the planner: the
+#     planner keeps 0.45 m of inflation from geometry, the doorway is 0.9 m
+#     wide, the body is 0.30 m across, and the measured cross-track error of
+#     the GUIDED straight-line follower consumes what is left. There is no
+#     local controller and no reactive avoidance to recover from the contact.
+#     Do not describe this platform as able to drive an arbitrary indoor
+#     route; it plans one, follows it in open space, and fails visibly in
+#     tight geometry.
 
 robot: car
 model: ral_car
@@ -45,9 +94,15 @@ bridge_config: bridge_car_{world}.yaml
 # World frame. x/y/yaw are DEFAULTS: the scenario's initial_pose overrides
 # them, so the pose the scenario declares and the pose the body is spawned at
 # cannot disagree. z is NOT overridable - it is a property of the body.
+#
+# y was 1.0 and is now 4.0. MEASURED, from exactly (1.0, 1.0)
+# (scenarios/baseline_car.yaml:22-27): "the car curved into wall A's lower
+# segment and spent the rest of the run pinned against it at (3.70, 2.08),
+# 4.8 m short". (1.0, 4.0) is the pose every committed car scenario actually
+# starts from, so the default and the evidence now agree.
 spawn:
   x: 1.0
-  y: 1.0
+  y: 4.0
   z: 0.06
   yaw: 0.0
   z_source: "the 0.06 m wheel radius: base_link's origin is the axle plane, so this puts the tyres on the floor (the hull is offset 0.04 m above it in ral_car/model.sdf)"
@@ -87,7 +142,69 @@ estimate:
 command:
   kind: position_setpoint
   topic: /mavros/setpoint_position/local
-  label: "GUIDED position setpoint (SET_POSITION_TARGET_LOCAL_NED)"
+  label: >-
+    GUIDED position setpoint (SET_POSITION_TARGET_LOCAL_NED), waypoints from
+    nav2 planner_server
+  # GLOBAL PLANNING ONLY. The driver asks planner_server for a path in `map`,
+  # resamples it to waypoint_spacing_m and publishes the waypoints one at a
+  # time as GUIDED setpoints; ArduRover remains the controller. Removing
+  # `planner_action` returns this platform to steering straight at the goal,
+  # which is what it did before - and the dashboard's plan layer follows this
+  # key rather than the robot name.
+  planner_action: /compute_path_to_pose
+  planner_id: CarHybrid
+  planner_tolerance_m: 0.25
+  # 1.0 m between waypoints: longer than the 0.611 m turning radius, so a leg
+  # is always executable, and short enough that the autopilot's straight-line
+  # chord between waypoints stays close to the planned curve.
+  waypoint_spacing_m: 1.0
+  # The pure-pursuit carrot: the commanded setpoint is the waypoint one
+  # lookahead further ALONG THE PATH than the robot's closest point on it.
+  #
+  # Two measurements set this. (1) Every GUIDED position target is a
+  # DESTINATION to ArduRover - it brakes to stop at it - so with a 0.8 m
+  # "advance once close" rule the car crept at a mean 0.205 m/s against 1.0
+  # configured (runs/baseline_car_20261026T143722Z). (2) Picking the carrot
+  # by STRAIGHT-LINE distance put it across a wall as soon as the path
+  # turned, and the car drove at it and pinned itself on wall A at world
+  # (3.70, 2.32) (runs/ui_car_20261026T145419Z, collision_count 1).
+  #
+  # 1.2 m: the chord to a carrot L ahead on a curve of radius R cuts the
+  # corner by about L^2 / (8R) = 1.44 / 4.89 = 0.29 m at this car's 0.611 m
+  # minimum radius, inside the 0.45 m inflation the planner keeps from walls;
+  # and the approach speed it admits, sqrt(2 * ATC_DECEL_MAX * 1.2) =
+  # 1.55 m/s, is above the 1.0 m/s cruise, so it does not limit speed.
+  waypoint_lookahead_m: 2.0
+  # How far the straight line the autopilot drives to the carrot may depart
+  # from the planned path before the carrot is pulled back. The autopilot
+  # commands a STRAIGHT LINE to a position, so without this a carrot beyond a
+  # corner is an instruction to cut it: MEASURED
+  # (runs/ui_car_20261026T153031Z), the car tracked the plan at 0.85 m/s until
+  # the carrot landed past the doorway corner, after which the chord crossed
+  # wall A and the vehicle drove into it at world (3.70, 2.1). 0.2 m is half
+  # the 0.45 m inflation the planner already keeps from geometry.
+  waypoint_corridor_m: 0.2
+  # The carrot must lie OUTSIDE BOTH minimum-radius turning circles tangent
+  # to the body's nose; this multiplies plant.min_turn_radius_m to set how far
+  # outside. Pure pursuit drives an arc of radius d / (2 sin alpha) to a
+  # candidate d away at heading error alpha, so a candidate inside those
+  # circles is a command this body is geometrically forbidden from obeying.
+  # MEASURED (runs/ui_car_20261026T221042Z, (1.0,1.0) -> (6.5,4.0)): at
+  # t = 8.4 s the commanded setpoint was 0.63 m away at 65 deg, needing a
+  # 0.35 m radius against this car's 0.611 m minimum; over the run the
+  # required steering averaged 30.2 deg (max 46.2) against +/-30 deg of lock
+  # while the steering actually taken averaged 3.1 deg, and the vehicle ended
+  # mavros:stalled_no_progress 3.04 m short at 0.104 m/s.
+  #
+  # 1.15, not 1.0: 0.611 m is the geometric ideal at FULL lock on a PARALLEL-
+  # steered model (see plant.source for both limitations), so a target exactly
+  # at the limit leaves the controller no authority. Effective radius 0.70 m.
+  waypoint_radius_margin: 1.15
+  # 0.2 Hz in SIM time. Between replans the autopilot has NO reactive
+  # avoidance: a new obstacle changes the route only when the next plan is
+  # requested, and MissionNode is single-threaded so planning cannot run in
+  # the background (mission_node.py:15-33).
+  replan_period_sim_s: 5.0
 
 mission_driver: mavros_guided
 
@@ -99,10 +216,27 @@ plant:
   min_turn_radius_m: 0.611
   source: >-
     rover_ackermann.parm CRUISE_SPEED/WP_SPEED 1.0; radius is geometric,
-    wheelbase 0.35 / tan(0.52), from ral_description/models/ral_car/model.sdf
+    wheelbase 0.35 / tan(0.52), from ral_description/models/ral_car/model.sdf.
+    TWO MODELLED LIMITATIONS, neither of them corrected: the two knuckles
+    share ArduPilotPlugin channel 0 with identical gains, so the steering is
+    PARALLEL rather than Ackermann (a real linkage turns the inner wheel
+    further than the outer one, and the inner/outer roles swap between a left
+    and a right turn, which a fixed linear offset/multiplier cannot express);
+    and both rear wheels share channel 2, so there is NO DIFFERENTIAL and the
+    inside rear wheel is driven at the same speed as the outside one. Both
+    cost tyre scrub in tight turns, which shows up as lateral slip the
+    estimator must absorb. What they do not change is the property every
+    claim here rests on: the vehicle is non-holonomic, has a finite 0.611 m
+    turning radius and cannot turn in place.
 
 footprint:
-  # Half-diagonal of the 0.50 x 0.30 base box: hypot(0.25, 0.15) = 0.2915.
+  shape: rectangle
+  length_m: 0.50
+  width_m: 0.30
+  # Circumscribed circle: half-diagonal of the 0.50 x 0.30 base box,
+  # hypot(0.25, 0.15) = 0.2915. Kept as the conservative fallback for any
+  # consumer that cannot use the rectangle. It is 1.95x the car's true WIDTH,
+  # so using it as the body is what made the 0.70 m doorways look impassable.
   radius_m: 0.292
   source: "ral_description/models/ral_car/model.sdf base_collision box 0.50 x 0.30"
 
@@ -124,9 +258,16 @@ goal_tolerance_m: 1.0
 # The runner's own arrival gate, applied to |robot estimate - commanded
 # setpoint| in the autopilot's ekf_local frame. Truth is never read: both
 # terms come from /mavros/local_position/odom and the setpoint this run
-# published. It exists because wp_dist is quantised to whole metres;
-# 1.5 m is WP_RADIUS 1.0 plus 0.5 m for the stop transient.
-arrival_estimate_tolerance_m: 1.5
+# published. It exists because wp_dist is quantised to whole metres.
+#
+# 0.6 m, not 1.5. The 1.5 m was WP_RADIUS 1.0 plus 0.5 m for the stop
+# transient, and it was the BINDING term: four committed runs reported
+# goal_pose_error_m 1.397 / 1.482 / 1.492 / 1.517, every one of them stopping
+# at this gate rather than at the goal. With WP_RADIUS now 0.3 the autopilot
+# drives closer before declaring arrival, and 0.6 m is 0.3 m plus the same
+# 0.3 m stop transient. If the vehicle cannot settle within it the mission
+# ends on TIMEOUT rather than arrival - a visible failure, not a hidden one.
+arrival_estimate_tolerance_m: 0.6
 kidnap_z_m: 0.06
 
 # The autopilot parameter file this platform is started with, relative to
@@ -172,6 +313,7 @@ record_topics:
   - /mavros/nav_controller_output/output    # wp_dist, the FCU's own distance to go
   - /mavros/setpoint_position/local         # what was actually commanded
   - /frame_alignment                        # the measured world->ekf_local offset
+  - /plan                                   # the planner_server path the driver follows, published by mavros_driver
 
 # Topics whose PRE-MISSION history is evidence: nothing may be published on
 # them until the recorder has actually subscribed.

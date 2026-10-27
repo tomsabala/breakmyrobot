@@ -1,6 +1,6 @@
 # Repeatability — measured spread, not a determinism claim
 
-Measured 2026-10-25 13:36 UTC by
+Measured 2026-10-26 16:26 UTC by
 `scripts/checks/repeatability_check.sh`, which runs
 `scripts/run_scenario.sh baseline_car` 3 times in sequence
 and reads the resulting `metrics.json` files. Every duration is sim time off
@@ -10,21 +10,20 @@ and reads the resulting `metrics.json` files. Every duration is sim time off
 
 | Metric | run 1 | run 2 | run 3 |
 | --- | --- | --- | --- |
-| `mission_duration_s` | 5.690 | 10.356 | 7.030 |
-| `path_length_m` | 3.987 | 5.567 | 4.928 |
-| `goal_pose_error_m` | 1.517 | 0.144 | 0.589 |
-| `est_error_mean_m` | 0.078 | 0.811 | 2.414 |
+| `mission_duration_s` | 7.074 | 33.100 | 7.116 |
+| `path_length_m` | 4.950 | 6.759 | 4.963 |
+| `goal_pose_error_m` | 0.583 | 1.201 | 0.570 |
+| `est_error_mean_m` | 0.105 | 0.398 | 0.106 |
 | `est_error_at_start_pose_m` | `null` (ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED) has no operat…) | `null` (ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED) has no operat…) | `null` (ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED) has no operat…) |
-| `plan_publications` | `null` (/plan exists only in the Nav2 stack; this platform plans ins…) | `null` (/plan exists only in the Nav2 stack; this platform plans ins…) | `null` (/plan exists only in the Nav2 stack; this platform plans ins…) |
+| `plan_publications` | 3 | 8 | 3 |
 | `recoveries` | `null` (/navigate_to_pose/_action/feedback exists only in the Nav2 s…) | `null` (/navigate_to_pose/_action/feedback exists only in the Nav2 s…) | `null` (/navigate_to_pose/_action/feedback exists only in the Nav2 s…) |
-| `collision_count` | 0 | 0 | 0 |
-| `mission_result` | `mavros:reached_wp_radius` | `mavros:reached_wp_radius` | `mavros:reached_wp_radius` |
+| `collision_count` | 0 | 1 | 0 |
+| `mission_result` | `mavros:reached_wp_radius` | `mavros:stalled_no_progress` | `mavros:reached_wp_radius` |
 | `fault_to_response_s` | `null` (no FaultEvent reached state=activated; states seen: none) | `null` (no FaultEvent reached state=activated; states seen: none) | `null` (no FaultEvent reached state=activated; states seen: none) |
 
 Why a value above is `null`:
 
 - ArduPilot EKF3 via MAVROS (LOCAL_POSITION_NED) has no operator-triggered initialization to measure from: the estimator sets its own origin at the autopilot's first GPS fix, nothing publishes /initialpose on this platform, and its uncertainty kind is 'estimator_status' rather than a pose covariance whose crossing could open a start-pose window
-- /plan exists only in the Nav2 stack; this platform plans inside the autopilot and publishes no path
 - /navigate_to_pose/_action/feedback exists only in the Nav2 stack; this platform plans inside the autopilot and publishes no path
 - no FaultEvent reached state=activated; states seen: none
 
@@ -32,16 +31,16 @@ Why a value above is `null`:
 
 | Metric | min | max | max − min | max − min as % of mean |
 | --- | --- | --- | --- | --- |
-| `mission_duration_s` | 5.690 | 10.356 | 4.666 | 60.7% |
-| `path_length_m` | 3.987 | 5.567 | 1.580 | 32.7% |
+| `mission_duration_s` | 7.074 | 33.100 | 26.026 | 165.1% |
+| `path_length_m` | 4.950 | 6.759 | 1.810 | 32.6% |
 
 ## Run provenance
 
 | Run | Image | `git_sha` | dirty | `map_sha256` | `world_to_map` | RTF |
 | --- | --- | --- | --- | --- | --- | --- |
-| `baseline_car_20261025T132957Z` | `sha256:4eb135c402d493098` | `25c89d3fe455` | True | `47d1e2ad01a41a52` | x = 0.5, y = 0.5, yaw = 0.0 | 0.79288088114438082, 1.0013588439512418, 0.79369394288499018 |
-| `baseline_car_20261025T133115Z` | `sha256:4eb135c402d493098` | `25c89d3fe455` | True | `47d1e2ad01a41a52` | x = 0.5, y = 0.5, yaw = 0.0 | 0.99998150034224365, 0.99557913086937455, 0.94558132212126045 |
-| `baseline_car_20261025T133232Z` | `sha256:4eb135c402d493098` | `25c89d3fe455` | True | `47d1e2ad01a41a52` | x = 0.5, y = 0.5, yaw = 0.0 | 1.0095294532741816, 0.99920762835071786, 0.99983802623974916 |
+| `baseline_car_20261026T162241Z` | `sha256:4eb135c402d493098` | `88e89603fa2f` | True | `47d1e2ad01a41a52` | x = 0.5, y = 0.5, yaw = 0.0 | 1.003251538235421, 1.0009288619839212, 0.99795070822066889 |
+| `baseline_car_20261026T162351Z` | `sha256:4eb135c402d493098` | `88e89603fa2f` | True | `47d1e2ad01a41a52` | x = 0.5, y = 0.5, yaw = 0.0 | 0.99687777879680839, 0.88840086068275381, 1.0242873904588654 |
+| `baseline_car_20261026T162531Z` | `sha256:4eb135c402d493098` | `88e89603fa2f` | True | `47d1e2ad01a41a52` | x = 0.5, y = 0.5, yaw = 0.0 | 1.0010736514912244, 0.99949875137618482, 0.99836368192532443 |
 
 ## What this does and does not show
 

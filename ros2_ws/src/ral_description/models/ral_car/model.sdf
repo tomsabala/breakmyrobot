@@ -389,6 +389,28 @@
          a tuning parameter: widening it here without changing TURN_RADIUS in
          rover_ackermann.parm would give the autopilot a geometry the vehicle
          does not have. -->
+    <!-- The knuckles carry <dynamics><damping>, which is the only thing in
+         this model that resists an instantaneous steering change.
+
+         MEASURED from /joint_states over a full mission
+         (runs/ui_car_20261026T145953Z, damping 0.05, and
+         runs/ui_car_20261026T150317Z, damping 0.2): the achieved slew rate is
+         0.0-0.1 deg/s median and 7.6-8.3 deg/s at the 95th percentile, well
+         inside rover_ackermann.parm's ATC_STR_RAT_MAX of 90 deg/s - but with
+         single-sample spikes of 475-790 deg/s, and raising the damping from
+         0.05 to 0.2 made the spikes LARGER, not smaller. So the commanded cap
+         is NOT enforced by this plant: the spikes are the gz POSITION loop
+         stepping the joint between physics frames, not a modelled actuator
+         rate limit. Recorded as a limitation rather than claimed as a bounded
+         actuator; the steering rate a mission actually uses is an order of
+         magnitude below the cap either way.
+
+         Re-measured after ATC_STR_RAT_FF was raised to 0.6 and the driver
+         began following a planned path (runs/ui_car_20261026T154830Z): the
+         p95 slew rose to 17-21 deg/s and the single-sample spikes to
+         1434 deg/s, and the achieved steering ANGLE range widened from
+         -2.7..6.3 deg to -21.7..12.6 deg. More steering authority is used,
+         the cap is still not what bounds it. -->
     <joint name="steer_left_joint" type="revolute">
       <parent>base_link</parent>
       <child>steer_left</child>
@@ -398,6 +420,9 @@
           <lower>-0.52</lower>
           <upper>0.52</upper>
         </limit>
+        <dynamics>
+          <damping>0.05</damping>
+        </dynamics>
       </axis>
     </joint>
 
@@ -410,6 +435,9 @@
           <lower>-0.52</lower>
           <upper>0.52</upper>
         </limit>
+        <dynamics>
+          <damping>0.05</damping>
+        </dynamics>
       </axis>
     </joint>
 
@@ -518,7 +546,16 @@
            artifact recorded a mean achieved speed near half the configured
            one. Sizing the actuator to the plant puts the autopilot's own
            regulation in range instead of asking it to correct an actuator
-           that is six times too strong or two times too weak. -->
+           that is six times too strong or two times too weak.
+
+           MEASURED with the 70 multiplier in place, on the one route this
+           vehicle completes (scenarios/baseline_car.yaml, straight corridor
+           through the doorway): mean achieved speed 0.701 m/s and p90
+           0.956 m/s against the 1.0 m/s target, i.e. the autopilot's speed
+           controller now reaches the configured cruise instead of saturating
+           at half of it. Speeds on routes WITH a turn are far lower
+           (0.10-0.18 m/s mean) and that is a controller limit, not an
+           actuator one: see car.yaml's navigation limitations. -->
 
       <!-- BOTH knuckles take channel 0 and the same gains, so both front wheels
            are commanded to the SAME angle. This is PARALLEL steering, not true

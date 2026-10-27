@@ -40,6 +40,16 @@
        no rosdep key for it to declare here. -->
   <exec_depend>mavros</exec_depend>
 
+  <!-- The car's GLOBAL PLANNER, started by car_nav.launch.py with
+       config/nav2_car.yaml: planner_server loads nav2_smac_planner's
+       SmacPlannerHybrid (a kinematically feasible search - a grid planner
+       would produce paths the car's 0.611 m turning radius cannot follow),
+       and nav2_lifecycle_manager transitions it and map_server once the
+       measured map -> ekf_local alignment exists. -->
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_smac_planner</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

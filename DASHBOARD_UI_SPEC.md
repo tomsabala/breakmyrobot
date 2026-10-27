@@ -303,7 +303,7 @@ Closed `outcome` set — display verbatim (`MissionState.msg:113-144`):
 ```
 nav2:STATUS_SUCCEEDED   nav2:STATUS_ABORTED   nav2:STATUS_CANCELED   nav2:unknown:status_<n>
 mavros:reached_wp_radius      mavros:mode_changed:<MODE>   mavros:disarmed
-mavros:stalled_no_progress    mavros:canceled_timeout
+mavros:stalled_no_progress    mavros:carrot_unreachable    mavros:canceled_timeout
 mavros:not_accepted:set_mode  mavros:not_accepted:arming   mavros:unknown:no_terminal
 runner:not_accepted
 runner:not_sent:goal_cell_occupied   runner:not_sent:footprint_outside_map
@@ -316,6 +316,10 @@ runner:bringup_failed   runner:bag_missing   runner:exception       ← run.json
 runner, not autonomy** — the UI repeats the driver's own `detail`, e.g.
 
 > `the robot's own estimate moved 0.066 m in 15.0 s sim, less than the 0.25 m this driver requires over 15 s. This is a DETERMINISTIC POLICY in the runner, not a decision the autopilot made: ArduRover carries no obstacle avoidance and would keep pushing until the scenario timeout. HOLD was commanded. Last wp_dist 7.0`
+
+`mavros:carrot_unreachable` is the same KIND of statement and MUST be captioned the same way: the
+planner produced a route and the driver re-requested it, but every candidate point on it lay inside
+the body's own minimum turning circle, so the driver published no setpoint for any of them.
 
 Real `detail` strings to design against:
 

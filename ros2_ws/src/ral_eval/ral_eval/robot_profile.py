@@ -140,6 +140,16 @@ def load_profile(path: str) -> dict:
     # `source` is read by run_scenario when it records what the footprint IS,
     # so an absent one is a run that cannot cite its own clearance budget.
     _require_sub(path, doc, 'footprint', ('radius_m', 'source'))
+    # `radius_m` is required for EVERY shape: it is the circumscribed radius,
+    # and it stays the conservative fallback wherever a consumer cannot use
+    # the polygon (the kidnap draft marker, nav2_roomba's robot_radius, the
+    # circular pre-flight path).
+    shape = doc['footprint'].get('shape', 'circle')
+    if shape not in ('circle', 'rectangle'):
+        raise ValueError(f'{path}: `footprint.shape` is {shape!r}; it must be '
+                         "'circle' or 'rectangle'")
+    if shape == 'rectangle':
+        _require_sub(path, doc, 'footprint', ('length_m', 'width_m'))
 
     uncertainty = doc['estimate']['uncertainty']
     if not isinstance(uncertainty, dict) or 'kind' not in uncertainty:

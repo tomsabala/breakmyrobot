@@ -88,14 +88,90 @@ ARMING_CHECK     0
 # vehicle may come to rest: see ral_bringup/config/robots/car.yaml.
 CRUISE_SPEED     1.0
 WP_SPEED         1.0
-WP_RADIUS        1.0
+# WP_RADIUS 0.3: ArduRover's own arrival radius. It was 1.0, and four committed
+# runs came to rest 1.397-1.517 m from the goal because the autopilot declared
+# the waypoint reached as soon as the (metre-quantised) wp_dist allowed it. The
+# metre quantum is unchanged - it is the message field - but a smaller radius
+# makes the autopilot drive closer before it stops, and the runner's own
+# estimate-side gate (car.yaml arrival_estimate_tolerance_m) is what bounds
+# where the vehicle may come to rest.
+WP_RADIUS        0.3
+# WP_PIVOT_ANGLE is deliberately NOT set here, so the firmware default is in
+# force. It was pinned at 0 ("an Ackermann car cannot pivot in place") and
+# that turned out to be the wrong inference: ArduPilot's pivot handling for a
+# steering vehicle is to slow down and steer hard, which is exactly how this
+# car has to take a tight corner, and disabling it removes that behaviour
+# without giving the vehicle anything in its place.
+# CRUISE_THROTTLE is the throttle ArduRover expects to produce CRUISE_SPEED,
+# and ral_car/model.sdf's channel-2 arithmetic (multiplier 70, offset -0.5)
+# was chosen against 50 %. It was never pinned, so the SDF's arithmetic
+# depended on an unpinned firmware default; pinning it makes the pair a
+# contract rather than a coincidence.
+CRUISE_THROTTLE  50
+
+# --- Acceleration and actuator slew -------------------------------------------
+# 1 m/s^2 reaches the 1.0 m/s cruise in 1.0 s over 0.5 m, which is shorter than
+# the 0.611 m minimum turning radius, so acceleration does not dominate a turn.
+# Symmetric deceleration is also the stop transient the arrival tolerance is
+# sized against.
+ATC_ACCEL_MAX    1.0
+ATC_DECEL_MAX    1.0
+# Full throttle sweep in 1 s (% per second), consistent with ATC_ACCEL_MAX.
+MOT_SLEWRATE     100
+# 0 means "use ATC_ACCEL_MAX / the default jerk" in Rover's S-curve path
+# controller. Pinned at the firmware default READ BACK FROM THIS BUILD rather
+# than invented: the path shape this stack follows comes from nav2's planner,
+# and inventing an acceleration profile here would change how a planned path
+# is executed with no measurement behind it.
+WP_ACCEL         0
+WP_JERK          0
 
 # --- Steering geometry and rate -----------------------------------------------
 # TURN_RADIUS is geometric, not tuned: wheelbase 0.35 / tan(0.52) = 0.611 m,
 # from the model's axle spacing and its +/-0.52 rad knuckle joint limits.
-# ATC_STR_RAT_MAX caps the commanded steering rate in deg/s.
+# ATC_STR_RAT_MAX caps the commanded steering rate in deg/s; the achieved rate
+# is bounded by the knuckle joints' damping in the SDF, measured there.
 TURN_RADIUS      0.611
 ATC_STR_RAT_MAX  90
+
+# --- Controller gains ----------------------------------------------------------
+# The speed loop and three of the four steering gains are the FIRMWARE'S OWN
+# DEFAULTS, read back from the running SITL of this image with
+# `ros2 param get /mavros/param <name>` while the car stack was up, and
+# written here so the sha256 of this file names a COMPLETE autopilot
+# configuration instead of one that silently inherits whatever ships.
+ATC_SPEED_P      0.2
+ATC_SPEED_I      0.2
+ATC_SPEED_D      0.0
+ATC_SPEED_FF     0.0
+ATC_STR_RAT_P    0.2
+ATC_STR_RAT_I    0.2
+ATC_STR_RAT_D    0.0
+
+# ATC_STR_RAT_FF is the ONE gain this project changes, and it is DERIVED from
+# this plant's geometry rather than guessed: it is the steering output needed
+# per rad/s of turn rate. At full lock the vehicle turns at v / R_min =
+# 1.0 / 0.611 = 1.64 rad/s for a normalised steering output of 1.0, so the
+# output per rad/s is R_min / v = 0.611.
+#
+# WHY IT WAS CHANGED, measured, three runs: with the firmware default 0.2 the
+# autopilot commanded only +/-6 deg of steering where the planned path needed
+# about 30, the vehicle under-steered across wall A and pinned itself at world
+# (3.70, 2.1) with collision_count 1 every time
+# (runs/ui_car_20261026T145953Z, ...T150317Z, ...T151638Z). The default is
+# sized for a vehicle whose steering output produces far more turn rate per
+# unit than this 0.611 m-radius car at its 1 m/s cruise.
+ATC_STR_RAT_FF   0.6
+
+# NOT PINNED, because this firmware does not have them. `ros2 param list
+# /mavros/param` on the running SITL (1269 parameters) contains no
+# NAVL1_PERIOD, no NAVL1_DAMPING, no TURN_MAX_G and no WP_OVERSHOOT: Rover 4.x
+# replaced the L1 navigation controller with the S-curve position controller
+# (WP_ACCEL / WP_JERK / ATC_ACCEL_MAX above), and ArduPilot silently IGNORES
+# an unknown name in a --defaults file. Writing them here would look like
+# control over lookahead and lateral acceleration that this build does not
+# offer. What actually shapes path following on this stack is the driver's
+# own carrot lookahead (car.yaml command.waypoint_lookahead_m) and WP_RADIUS.
 
 # --- Failsafes ----------------------------------------------------------------
 # FS_GCS_ENABLE 0: nothing in this stack sends a GCS heartbeat (MAVROS attaches

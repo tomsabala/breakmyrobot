@@ -8,12 +8,16 @@ puts the autopilot into GUIDED, arms it, drives one real mission to
 system. Writes docs/car-closed-loop.md and exits non-zero if any check fails.
 
 This is the Roomba harness's sibling and is numbered the same way, but the
-stack underneath it shares almost nothing with Nav2: there is no action server,
-no map_server, no AMCL and no costmap. ArduRover plans and controls inside the
-autopilot, EKF3 estimates the pose from the IMU and SITL's synthesised GPS, and
-MAVROS is the only link between that autopilot and ROS. So this harness drives
-MAVROS directly — set_mode, arming, a republished position setpoint — exactly
-as `ral_eval`'s MavrosGuidedDriver does for a scenario run, and it decides the
+stack underneath it shares almost nothing with Nav2's navigation: there is no
+action server, no AMCL, no controller and no local costmap. ArduRover owns the
+control loop, EKF3 estimates the pose from the IMU and SITL's synthesised GPS,
+and MAVROS is the only link between that autopilot and ROS. Nav2 contributes
+GLOBAL PLANNING only (map_server plus planner_server, config/nav2_car.yaml),
+which ral_eval's MavrosGuidedDriver consumes in a scenario run.
+
+This harness drives MAVROS directly - set_mode, arming, a republished position
+setpoint straight to the goal, with NO planner in the loop - exactly as the
+driver does for a goal it cannot plan, and it decides the
 mission ended by the same rule the driver uses: the FCU's own
 NAV_CONTROLLER_OUTPUT.wp_dist inside the profile's goal_tolerance_m on three
 consecutive messages, while the mode is still GUIDED and the vehicle armed.
@@ -1172,10 +1176,18 @@ def main() -> int:
         'and drives one real mission to `baseline_car.yaml`\'s goal. Every duration is',
         'sim time off `/clock`.',
         '',
-        'There is no Nav2, no `map_server` and no AMCL on this platform: ArduRover',
-        'plans and controls inside the autopilot, EKF3 estimates the pose from the IMU',
-        'and SITL\'s synthesised GPS, and MAVROS is the only link between that',
-        'autopilot and ROS. The mission therefore ends on a CONJUNCTION of two',
+        'There is no AMCL and no Nav2 CONTROLLER on this platform: ArduRover owns',
+        'the control loop, EKF3 estimates the pose from the IMU and SITL\'s',
+        'synthesised GPS, and MAVROS is the only link between that autopilot and',
+        'ROS. What DOES run from Nav2 is GLOBAL PLANNING only - `map_server` plus',
+        '`planner_server` (`config/nav2_car.yaml`) - whose path',
+        '`ral_eval/mavros_driver.py` streams to the autopilot as sequential GUIDED',
+        'setpoints and republishes on `/plan`. Between replans the autopilot steers',
+        'straight at its current setpoint and has NO reactive obstacle avoidance.',
+        'This harness drives its own mission and does not use the planner, so the',
+        'numbers below measure the autopilot link, the frames and the plant.',
+        '',
+        'The mission therefore ends on a CONJUNCTION of two',
         'things the robot itself reports: the FCU\'s own',
         '`NAV_CONTROLLER_OUTPUT.wp_dist` inside the profile\'s `goal_tolerance_m`',
         'on three consecutive messages while the mode is still `GUIDED` and the',
