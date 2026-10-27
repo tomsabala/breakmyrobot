@@ -53,7 +53,7 @@ EXIT_TOO_FEW_RUNS = 2
 # run that does not carry it. A v3 file, for instance, has no
 # scan_degradation_divergence.pairs_unmatched at all, and an absent key is
 # indistinguishable from a measured zero.
-METRICS_VERSION_SUPPORTED = 5
+METRICS_VERSION_SUPPORTED = 6
 
 # The metrics reported per run. `mission_result` is rendered from its
 # {state, outcome, source}.
@@ -258,14 +258,16 @@ def main() -> int:
             '- **`nav2_amcl` exposes no seed.** Its particle filter draws from `drand48`,',
             '  seeded outside our control, so the estimate differs run to run even with',
             '  identical sensor input. Every `est_error_*` number inherits that.',
-            '- **ROS callback scheduling and the 20 Hz DWB loop are not deterministic.**',
-            '  Control decisions land on slightly different sim instants each run, which',
-            '  shows up directly in `mission_duration_s` and `path_length_m`.',
+            '- **ROS callback scheduling and the 20 Hz controller loop are not**',
+            '  **deterministic.** Control decisions land on slightly different sim',
+            '  instants each run, which shows up directly in `mission_duration_s` and',
+            '  `path_length_m`.',
             '- **The start HEADING is aligned before the goal is sent, and it dominates**',
             '  **everything else.** The localization warm-up is an in-place rotation, so it',
             '  ends wherever convergence happened to land. With that arbitrary heading the',
             '  measured spread of `mission_duration_s` over three runs was **12.5%** (71.0 to',
-            '  80.5 s): facing away from the goal, DWB reversed at 0.1 m/s for 40 s instead',
+            '  80.5 s): facing away from the goal, DWB — the controller of the day —',
+            '  reversed at 0.1 m/s for 40 s instead',
             '  of turning. The runner now turns back to the scenario\'s declared initial yaw',
             '  first, using `/amcl_pose` — the robot\'s own estimate, never ground truth —',
             '  and `run.json` records `initial_yaw_aligned` and the residual AMCL believed',

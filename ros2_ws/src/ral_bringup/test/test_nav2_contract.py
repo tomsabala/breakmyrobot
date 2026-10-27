@@ -32,6 +32,7 @@ Everything here is a file parse. It runs in every `colcon test`, with no gz,
 no ROS graph and no map.
 """
 
+import math
 from functools import lru_cache
 from pathlib import Path
 from xml.etree import ElementTree
@@ -101,50 +102,77 @@ def _costmaps():
     }
 
 
-def test_dwb_limits_stay_inside_the_diffdrive_envelope():
+def test_controller_limits_stay_inside_the_diffdrive_envelope():
+    """Every speed the controller can command must be one the plant can produce."""
     plant = _diff_drive()
-    dwb = _follow_path()
+    follow = _follow_path()
     checks = [
-        ('max_vel_x', dwb['max_vel_x'], float(plant['max_linear_velocity']), 'le'),
-        ('max_speed_xy', dwb['max_speed_xy'], float(plant['max_linear_velocity']), 'le'),
-        ('max_vel_theta', dwb['max_vel_theta'], float(plant['max_angular_velocity']), 'le'),
-        ('acc_lim_x', dwb['acc_lim_x'], float(plant['max_linear_acceleration']), 'le'),
-        ('acc_lim_theta', dwb['acc_lim_theta'], float(plant['max_angular_acceleration']), 'le'),
-        ('decel_lim_x', dwb['decel_lim_x'], float(plant['min_linear_acceleration']), 'ge'),
-        ('decel_lim_theta', dwb['decel_lim_theta'],
-         float(plant['min_angular_acceleration']), 'ge'),
+        ('desired_linear_vel', follow['desired_linear_vel'],
+         float(plant['max_linear_velocity'])),
+        ('rotate_to_heading_angular_vel', follow['rotate_to_heading_angular_vel'],
+         float(plant['max_angular_velocity'])),
+        ('max_angular_accel', follow['max_angular_accel'],
+         float(plant['max_angular_acceleration'])),
     ]
-    for name, configured, limit, direction in checks:
-        if direction == 'le':
-            assert configured <= limit, (
-                f'FollowPath.{name} = {configured} exceeds the plant limit {limit} from '
-                f'{MODEL_SDF.name}: the simulated drive would saturate and the clamp would '
-                'look like a controller that cannot follow its own plan')
-        else:
-            assert configured >= limit, (
-                f'FollowPath.{name} = {configured} is below the plant limit {limit} from '
-                f'{MODEL_SDF.name}')
-    assert dwb['min_vel_x'] >= -float(plant['max_linear_velocity'])
+    for name, configured, limit in checks:
+        assert configured <= limit, (
+            f'FollowPath.{name} = {configured} exceeds the plant limit {limit} from '
+            f'{MODEL_SDF.name}: the simulated drive would saturate and the clamp would '
+            'look like a controller that cannot follow its own plan')
+
+
+def test_cost_regulation_matches_the_local_costmap_inflation():
+    """
+    The controller inverts the costmap's own cost curve to get a distance.
+
+    It slows down by reading the local costmap's inflated cost under the robot
+    and undoing the exponential the inflation layer applied. That inversion
+    uses FollowPath.inflation_cost_scaling_factor, so if it disagrees with the
+    layer that produced the cost, every regulated speed is wrong by a factor
+    nothing reports - the robot would simply crawl, or fail to slow, with no
+    error anywhere.
+    """
+    follow = _follow_path()
+    layer = _costmaps()['local_costmap']['inflation_layer']
+    assert follow['inflation_cost_scaling_factor'] == layer['cost_scaling_factor'], (
+        f'FollowPath.inflation_cost_scaling_factor '
+        f'{follow["inflation_cost_scaling_factor"]} != local_costmap inflation_layer '
+        f'cost_scaling_factor {layer["cost_scaling_factor"]}')
+
+
+def test_rotation_shim_covers_the_angle_that_deadlocked_dwb():
+    """
+    The shim must engage below the heading error that stalled the old controller.
+
+    MEASURED (runs/ui_roomba_20261026T165845Z): the robot sat 55 s with a
+    126 deg error between its heading and the start of a valid plan. A
+    threshold above that angle would leave the same hole.
+    """
+    follow = _follow_path()
+    assert follow['plugin'].endswith('RotationShimController')
+    assert follow['angular_dist_threshold'] <= math.radians(126.0)
 
 
 def test_velocity_smoother_matches_the_controller_envelope():
-    """The smoother publishes /cmd_vel; it must shape, never reshape, DWB's output."""
-    dwb = _follow_path()
+    """The smoother publishes /cmd_vel; it must shape, never truncate, the output."""
+    follow = _follow_path()
     smoother = _nav2()['velocity_smoother']['ros__parameters']
     shipped = [0.26, 0.0, 1.0]
     reason = (
         'velocity_smoother is the node that actually publishes /cmd_vel '
         '(nav2_bringup/navigation_launch.py remaps cmd_vel_smoothed -> cmd_vel), so its '
-        f'envelope must equal DWB\'s. Left at the shipped TurtleBot3 default {shipped} it '
-        'silently truncates every command above 0.26 m/s, and the truncation is '
-        'indistinguishable from a controller bug. This test exists to catch exactly that.')
-    assert smoother['max_velocity'][0] == dwb['max_vel_x'], reason
-    assert smoother['max_velocity'][2] == dwb['max_vel_theta'], reason
-    assert smoother['min_velocity'][0] == dwb['min_vel_x'], reason
-    assert smoother['max_accel'][0] == dwb['acc_lim_x'], reason
-    assert smoother['max_accel'][2] == dwb['acc_lim_theta'], reason
-    assert smoother['max_decel'][0] == dwb['decel_lim_x'], reason
-    assert smoother['max_decel'][2] == dwb['decel_lim_theta'], reason
+        f'envelope must cover the controller\'s. Left at the shipped TurtleBot3 default '
+        f'{shipped} it silently truncates every command above 0.26 m/s, and the '
+        'truncation is indistinguishable from a controller bug. This test exists to '
+        'catch exactly that.')
+    assert smoother['max_velocity'][0] >= follow['desired_linear_vel'], reason
+    assert smoother['max_velocity'][2] >= follow['rotate_to_heading_angular_vel'], reason
+    assert smoother['max_accel'][2] >= follow['max_angular_accel'], reason
+    # The controller never commands reverse (allow_reversing is false), but the
+    # BackUp recovery behaviour does, and it publishes through this smoother.
+    assert smoother['min_velocity'][0] <= -0.05, (
+        'velocity_smoother.min_velocity[0] must leave the BackUp recovery a usable '
+        'reverse command, or the recovery runs and the robot does not move')
 
 
 def test_velocity_limit_arrays_are_floats():

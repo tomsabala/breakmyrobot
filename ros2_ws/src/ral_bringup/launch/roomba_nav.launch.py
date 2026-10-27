@@ -59,10 +59,15 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    EmitEvent,
+    ExecuteProcess,
     IncludeLaunchDescription,
+    LogInfo,
     OpaqueFunction,
-    TimerAction,
+    RegisterEventHandler,
 )
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -75,13 +80,57 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import map_to_world_static_tf          # noqa: E402
 
 
+def _nav2_after_gate(event, context):
+    """
+    Start Nav2 only if the gate PASSED; otherwise shut the launch down.
+
+    Nav2 must NEVER start behind a failed gate. MEASURED,
+    logs/stack_roomba_20261026T205614Z.log: started into an incomplete TF
+    tree, the costmap looped on "two or more unconnected trees", the
+    component container ignored SIGTERM for 10 s and was SIGKILLed (exit -9),
+    and the gateway failed the stack 90 s later with "no messages on /map".
+    A named shutdown here is the same failure, 90 s earlier, with the missing
+    precondition on the gate's own stderr.
+    """
+    if event.returncode == 0:
+        nav2_share = get_package_share_directory('nav2_bringup')
+        return [IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_share, 'launch', 'bringup_launch.py')),
+            launch_arguments={
+                'map': LaunchConfiguration('map'),
+                'params_file': LaunchConfiguration('params_file'),
+                'use_sim_time': 'true',
+                'autostart': LaunchConfiguration('autostart'),
+                'use_composition': LaunchConfiguration('use_composition'),
+                'slam': 'False',
+            }.items())]
+    return [
+        LogInfo(msg='nav2_gate: odom -> base_link and an advancing /clock were '
+                    'not both observed (exit '
+                    f'{event.returncode}); Nav2 is NOT started, because a '
+                    'costmap activated against an incomplete TF tree wedges '
+                    'the component container instead of failing. See the '
+                    "gate's stderr above for which precondition is missing."),
+        EmitEvent(event=Shutdown(
+            reason='nav2_gate failed: odom -> base_link did not resolve, or '
+                   '/clock was not advancing')),
+    ]
+
+
 def generate_launch_description() -> LaunchDescription:
     bringup_share = get_package_share_directory('ral_bringup')
-    nav2_share = get_package_share_directory('nav2_bringup')
 
     world = LaunchConfiguration('world')
     robot = LaunchConfiguration('robot')
     seed = LaunchConfiguration('seed')
+
+    # The gate is held in a local because the event handler below must target
+    # this exact action, not a second copy of it.
+    nav2_gate = ExecuteProcess(
+        cmd=['ros2', 'run', 'ral_eval', 'wait_for_tf',
+             '--parent', 'odom', '--child', 'base_link', '--timeout', '120'],
+        name='nav2_gate', output='screen')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -124,9 +173,6 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             'use_composition', default_value='True',
             description='Load the Nav2 nodes into one component container.'),
-        DeclareLaunchArgument(
-            'nav2_start_delay', default_value='10.0',
-            description='WALL seconds to wait for gz before starting Nav2.'),
 
         # First, so that an alignment that is missing, unsealed or measured
         # against a different grid aborts the launch before anything is
@@ -153,29 +199,21 @@ def generate_launch_description() -> LaunchDescription:
                 os.path.join(bringup_share, 'launch', 'faults.launch.py')),
             launch_arguments={'world': world, 'robot': robot, 'seed': seed}.items()),
 
-        # Nav2 activates its costmaps as soon as it starts. If gz has not yet
-        # published /clock and the bridge has not yet published
-        # odom -> base_link, costmap activation aborts with "Timed out waiting
-        # for transform" and the lifecycle manager leaves the stack down.
+        # Nav2 activates its costmaps as soon as it starts, and a costmap asks
+        # for odom -> base_link at the LATEST available time. Starting it
+        # before the bridge publishes that transform, or before gz publishes
+        # an advancing /clock, is a measured stack failure (see
+        # _nav2_after_gate). This gate waits for exactly those two conditions
+        # and nothing more, so the wait is as short as the machine allows.
         #
-        # The delay is measured in WALL seconds on purpose: at t=0 sim time
-        # does not exist yet, so a sim-time timer would never fire. If
-        # activation still fails on a slower machine, raise this - do NOT
-        # raise transform_tolerance, which would mask genuinely stale TF
-        # during Phase 4's fault runs.
-        TimerAction(
-            period=LaunchConfiguration('nav2_start_delay'),
-            actions=[
-                IncludeLaunchDescription(
-                    PythonLaunchDescriptionSource(
-                        os.path.join(nav2_share, 'launch', 'bringup_launch.py')),
-                    launch_arguments={
-                        'map': LaunchConfiguration('map'),
-                        'params_file': LaunchConfiguration('params_file'),
-                        'use_sim_time': 'true',
-                        'autostart': LaunchConfiguration('autostart'),
-                        'use_composition': LaunchConfiguration('use_composition'),
-                        'slam': 'False',
-                    }.items()),
-            ]),
+        # It replaced a fixed 11.5 s wall timer that was BOTH wasteful and
+        # insufficient: logs/stack_roomba_20261026T204117Z.log spent 11.5 s
+        # idle in a ~30 s bring-up, and logs/stack_roomba_20261026T205614Z.log
+        # fired into an incomplete TF tree anyway.
+        #
+        # Do NOT raise transform_tolerance instead: that would mask genuinely
+        # stale TF during Phase 4's fault runs.
+        nav2_gate,
+        RegisterEventHandler(OnProcessExit(target_action=nav2_gate,
+                                           on_exit=_nav2_after_gate)),
     ])

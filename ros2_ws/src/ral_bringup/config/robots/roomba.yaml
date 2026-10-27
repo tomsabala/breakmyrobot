@@ -76,6 +76,10 @@ plant:
   source: "ral_roomba/model.sdf DiffDrive max_linear_velocity/max_angular_velocity"
 
 footprint:
+  # The Roomba really is a disc, so the circumscribed radius IS the body.
+  # Stated explicitly rather than left to the schema default, so that a reader
+  # can tell a disc from an unfilled field.
+  shape: circle
   radius_m: 0.18
   source: "ral_bringup/config/nav2_roomba.yaml global_costmap.robot_radius"
 

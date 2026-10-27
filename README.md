@@ -123,7 +123,18 @@ Use established robotics software and platform-appropriate protocols where they 
 
 **Status:** Two robots are integrated and measured, each under its own autonomy
 stack. `ral_roomba` is a differential-drive platform driven by Nav2 and
-localized by AMCL against the committed map; `ral_car` is an Ackermann vehicle
+localized by AMCL against the committed map. Its local controller is
+`RotationShimController` wrapping `RegulatedPurePursuitController`, which
+**replaced DWB** — DWB judges a move by rolling it forward for a fixed
+`sim_time` at the sampled speed, so in a 0.65 m doorway or a 0.75 m pocket it
+commanded near-zero rather than slowing down, and a measured operator mission
+(`runs/ui_roomba_20261026T165845Z`) ended 3.07 m short with a valid plan in
+hand. The replacement regulates speed by obstacle proximity and curve
+tightness instead, and rotates in place when the path starts off-heading.
+MEASURED on the identical scenario, same three operator obstacles at the same
+poses: DWB `nav2:STATUS_CANCELED` 3.070 m short after 180 s sim with 10
+recoveries, against `nav2:STATUS_SUCCEEDED` 0.167 m from the goal in 65 s sim
+for the replacement. `ral_car` is an Ackermann vehicle
 driven by ArduRover SITL over MAVLink/MAVROS and localized by the autopilot's
 own EKF3, with no AMCL and no Nav2 controller. The car does now run Nav2's
 GLOBAL planner (`map_server` + `planner_server`, `config/nav2_car.yaml`): its
@@ -215,6 +226,25 @@ stops the stack for either robot, watches bring-up topic by topic, sets a goal
 in the gz world frame, runs a mission, injects any fault the selected robot
 supports, and reads the terminal outcome — then switches to the Run Inspector
 for the committed evidence under `runs/`.
+
+**The Roomba's Nav2 now starts on a measured condition, not a timer.**
+`roomba_nav.launch.py` used to wait a fixed 11.5 s wall before including
+`nav2_bringup`, which was both wasteful (MEASURED,
+`logs/stack_roomba_20261026T204117Z.log`: the robot spawned at +0.7 s, the
+Nav2 container started at +12.2 s) and insufficient (MEASURED,
+`...T205614Z.log`: it fired into an incomplete TF tree, the costmap looped on
+"two or more unconnected trees", the container ignored SIGTERM and was
+SIGKILLed, and the stack failed with "no messages on /map within 90 s wall").
+A `ral_eval wait_for_tf` gate now exits 0 only once `/clock` has carried two
+messages AND `odom -> base_link` resolves at the latest available time — the
+question a costmap itself asks — and Nav2 is started by an `OnProcessExit`
+handler that SHUTS THE LAUNCH DOWN rather than starting Nav2 behind a failed
+gate. MEASURED over five consecutive gateway starts: `starting -> ready` in
+20-22 s wall (median 21 s against ~30 s before), zero failures, zero
+"unconnected trees" lines. The compressed bring-up exposed a second race —
+the runner seeded `/initialpose` before AMCL had subscribed, so AMCL never
+got a pose and published nothing (3 of 5 starts) — which is now gated on the
+subscriber existing rather than on a sleep.
 
 Three properties are structural rather than stylistic. A browser mission is
 driven through the **same** `MissionNode` and `MissionDriver` a measured run

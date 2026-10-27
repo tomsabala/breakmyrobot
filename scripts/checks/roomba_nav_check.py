@@ -423,9 +423,12 @@ def main() -> int:
     model = profile['model']
     # The envelope Nav2 is CONFIGURED to stay inside, which is what the
     # observed commands are judged against; PLANT_MAX_* above is the wider
-    # bound the hardware itself imposes.
+    # bound the hardware itself imposes. `desired_linear_vel` is
+    # RegulatedPurePursuit's name for it: the controller regulates DOWN from
+    # this value by obstacle proximity and curve tightness, so it is a
+    # ceiling, never a setpoint.
     configured_max_linear = params[
-        'controller_server']['ros__parameters']['FollowPath']['max_vel_x']
+        'controller_server']['ros__parameters']['FollowPath']['desired_linear_vel']
     inflation = {
         name: params[name][name]['ros__parameters']['inflation_layer']['inflation_radius']
         for name in ('local_costmap', 'global_costmap')}
@@ -821,7 +824,8 @@ def main() -> int:
         '  configured for and did not exceed it (check 12, two-sided on linear',
         '  speed). The lower bound is the load-bearing half: `velocity_smoother`',
         '  publishes `/cmd_vel`, and left at its shipped TurtleBot3 `0.26 m/s` it',
-        '  would clamp DWB while still sitting inside the plant\'s `0.46 m/s`.',
+        '  would clamp the controller while still sitting inside the plant\'s',
+        '  `0.46 m/s`.',
         '  Reaching the configured maximum is what shows the override is in force',
         '  at runtime, not merely present in the YAML.',
         '- The configuration is additionally enforced without a simulator by',

@@ -44,6 +44,11 @@ import rclpy
 from rclpy.action import ActionClient
 
 AMCL_CONVERGE_SIM = 30.0         # s sim allowed for the filter to converge
+# WALL seconds for AMCL to create its /initialpose subscription after the
+# lifecycle manager activates it. WALL, because this runs while sim time is
+# still only seconds old. Generous: losing this race costs the whole stack
+# (see prepare), while waiting costs nothing once the subscriber appears.
+AMCL_SUBSCRIBE_WALL = 30.0
 AMCL_WARMUP_RATE = 0.6           # rad/s in-place rotation; AMCL updates on motion only
 # AMCL publishes on filter UPDATE, and its filter updates on motion. The
 # instant it converges the warm-up would otherwise stop, and the robot then
@@ -119,6 +124,27 @@ class Nav2Driver(MissionDriver):
         """
         node = self.node
         node.amcl = None
+        # AMCL's /initialpose subscription is VOLATILE: a message published
+        # before it exists is dropped, AMCL never gets a pose, and it logs
+        # "AMCL cannot publish a pose or update the transform. Please set the
+        # initial pose..." forever while map -> odom is never published and
+        # every costmap reports "two or more unconnected trees". MEASURED:
+        # with Nav2 started on a TF gate instead of an 11.5 s timer the whole
+        # bring-up compressed and this race was lost in 3 of 5 consecutive
+        # starts (logs/stack_roomba_20261026T225231Z, ...T225353Z,
+        # ...T225515Z); it was already lost once under the old timer
+        # (...T205614Z). Waiting for the SUBSCRIBER is the measured
+        # precondition; a longer sleep would only move the race.
+        waited = 0.0
+        while node.initial_pose_pub.get_subscription_count() < 1 and \
+                waited < AMCL_SUBSCRIBE_WALL:
+            node.spin_wall(0.25)
+            waited += 0.25
+        if node.initial_pose_pub.get_subscription_count() < 1:
+            print(f'--- WARNING: nothing subscribed to /initialpose within '
+                  f'{AMCL_SUBSCRIBE_WALL:.0f} s wall; seeding anyway, and AMCL will '
+                  'report that it has no initial pose if it never arrived',
+                  flush=True)
         initialpose_sim = node.sim_now()
         for _ in range(3):
             node.publish_initial_pose(*initial_map)
@@ -170,12 +196,23 @@ class Nav2Driver(MissionDriver):
             node.converged_sim - initialpose_sim if node.converged_sim is not None
             else None)
         record['warmup_total_sim_s'] = node.sim_now() - initialpose_sim
+        # None, not absent: a filter that published NOTHING has no trace, and
+        # the message below has to say which of the two happened. MEASURED,
+        # logs/stack_roomba_20261026T225231Z.log: AMCL never received an
+        # /initialpose, never published, and reading this key raised KeyError
+        # inside the gateway's bring-up worker - the stack failed with a
+        # traceback instead of with the reason it failed.
+        record['localization_cov_trace'] = None
         if node.amcl is not None:
             cov = node.amcl.pose.covariance
             record['localization_cov_trace'] = cov[0] + cov[7] + cov[35]
         if not did_converge:
+            trace = record['localization_cov_trace']
             print(f'--- AMCL did not converge within {AMCL_CONVERGE_SIM:.0f} s sim '
-                  f'(trace {record["localization_cov_trace"]}); continuing', flush=True)
+                  + (f'(trace {trace})' if trace is not None
+                     else '(it published NO pose at all: nothing was received on '
+                          '/amcl_pose, so there is no covariance to report)')
+                  + '; continuing', flush=True)
         return None
 
     def _align_to_initial_yaw(self, target_yaw: float) -> 'tuple[bool, float | None]':
