@@ -63,7 +63,15 @@ EXPOSE 8080
 # The broker waits on the image's own HEALTHCHECK before it probes `readyPath`
 # (gateway/README.md: the `health` and `probe` phases), so an image without one
 # is an instance the broker cannot tell apart from a hung one.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=2s --retries=3 \
+#
+# The interval is the COLD START a visitor waits, not a background cost: the
+# first check does not run until `start-period` has elapsed and the container
+# is not `healthy` until it passes. MEASURED through the real broker
+# (`docker-compose.dev.yml`, `/boot/breakmyrobot`) at 10s/2s: `readyMs` 16,670
+# for a server that answers in milliseconds. Caddy with a directory of static
+# files has nothing to warm up, so the period is short and the retries carry
+# the tolerance.
+HEALTHCHECK --interval=2s --timeout=2s --start-period=1s --retries=5 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
 LABEL org.opencontainers.image.title="Resilient Autonomy Lab" \
