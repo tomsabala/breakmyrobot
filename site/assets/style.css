@@ -1,0 +1,376 @@
+/* The whole site's stylesheet. One file, hand-written, no framework, no build
+ * step of its own; site/build.mjs copies it to dist/assets/style.css.
+ *
+ * The palette is dashboard/src/theme/tokens.ts, so the documents and the
+ * console they link to read as one system. The five provenance colours keep
+ * their meaning here too — red is simulator truth, blue the robot's estimate,
+ * green a plan, orange an operator command, magenta a fault — which is why
+ * none of them is used as a decorative accent on this site. Links take the
+ * console's --link blue, and nothing else is coloured.
+ *
+ * No @font-face and no @import: a visitor downloads HTML, CSS, three PNGs and
+ * nothing else. The console bundles its own IBM Plex; these pages deliberately
+ * do not, because a 200 KB webfont to render prose is not worth the round trip.
+ */
+
+:root {
+  /* surfaces */
+  --bg: #181818;
+  --panel: #1c1c1c;
+  --inset: #1e1e1e;
+  --sunken: #1a1a1a;
+  --row: #262626;
+  --row-alt: #2a2a2a;
+  --header: #2c2c2c;
+
+  /* borders */
+  --line: #333;
+  --line-mid: #444;
+  --border: #555;
+
+  /* text */
+  --text: #e6e6e6;
+  --text-2: #cfcfcf;
+  --text-3: #bdbdbd;
+  --text-5: #8a8a8a;
+
+  /* accents */
+  --link: #8fd0ff;
+  --warn: #f0d08a;
+  --warn-border: #6a5a30;
+  --good: #9ad09a;
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, "Noto Sans", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --measure: 75ch;
+  --pad: 1.5rem;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  background: var(--bg);
+  /* 16px prose, against the console's 12.5px instrument density: this is
+   * reading material, not a panel full of numbers. */
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.25rem;
+  padding: 0.7rem var(--pad);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.topbar .brand {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  text-decoration: none;
+  margin-right: auto;
+}
+
+.topbar nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  font-size: 0.9rem;
+}
+
+.topbar nav a {
+  color: var(--text-3);
+  text-decoration: none;
+  padding-bottom: 2px;
+  border-bottom: 1px solid transparent;
+}
+
+.topbar nav a:hover { color: var(--text); border-bottom-color: var(--border); }
+.topbar nav a[aria-current="page"] { color: var(--link); border-bottom-color: var(--link); }
+
+/* ------------------------------------------------------------------ main */
+
+main {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 2.5rem var(--pad) 3rem;
+}
+
+h1, h2, h3, h4 {
+  line-height: 1.25;
+  font-weight: 600;
+  margin: 2.2em 0 0.6em;
+  scroll-margin-top: 4rem; /* the sticky header must not eat an anchor target */
+}
+
+h1 { font-size: 1.9rem; margin-top: 0; letter-spacing: -0.01em; }
+h2 { font-size: 1.35rem; border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+h3 { font-size: 1.1rem; }
+h4 { font-size: 1rem; color: var(--text-2); }
+
+p, ul, ol { margin: 0 0 1.1em; }
+li { margin-bottom: 0.35em; }
+li > ul, li > ol { margin-top: 0.35em; }
+
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { color: #b8e2ff; }
+
+strong { color: #f2f2f2; font-weight: 600; }
+em { color: var(--text-2); }
+
+hr { border: 0; border-top: 1px solid var(--line); margin: 2.5rem 0; }
+
+blockquote {
+  margin: 0 0 1.1em;
+  padding: 0.1rem 1rem;
+  border-left: 3px solid var(--line-mid);
+  color: var(--text-3);
+}
+
+/* -------------------------------------------------------------- the hero */
+
+.hero {
+  margin-bottom: 2.75rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.hero h1 { font-size: clamp(1.9rem, 1.4rem + 2.2vw, 2.6rem); margin-bottom: 0.4em; }
+
+.hero .tagline {
+  font-size: 1.12rem;
+  line-height: 1.5;
+  color: var(--text-2);
+  max-width: 62ch;
+}
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 1.6rem 0 1.2rem;
+}
+
+.btn {
+  display: inline-block;
+  padding: 0.55rem 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--row);
+  color: var(--text);
+  font-size: 0.95rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn:hover { background: var(--row-alt); border-color: #6a6a6a; color: var(--text); }
+
+.btn-primary {
+  border-color: var(--link);
+  color: var(--link);
+  background: #1f2a33;
+}
+
+.btn-primary:hover { background: #26343f; color: #b8e2ff; }
+
+.hero-note {
+  font-size: 0.9rem;
+  color: var(--text-5);
+  max-width: 68ch;
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------- code and tables */
+
+code, pre, kbd, samp { font-family: var(--mono); }
+
+code {
+  font-size: 0.875em;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.08em 0.32em;
+  color: var(--text-2);
+  overflow-wrap: break-word;
+}
+
+pre {
+  margin: 0 0 1.3em;
+  padding: 0.85rem 1rem;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--text-2);
+  white-space: pre;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.4em;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+  background: var(--panel);
+}
+
+th, td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+thead th {
+  background: var(--header);
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+}
+
+tbody tr:nth-child(even) { background: var(--inset); }
+tbody tr:last-child td { border-bottom: 0; }
+td code, th code { background: var(--bg); }
+
+/* ------------------------------------------------- figures and diagrams */
+
+.shot {
+  margin: 1.8em 0;
+  padding: 0;
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line-mid);
+  border-radius: 3px;
+  background: var(--sunken);
+}
+
+.shot figcaption,
+.diagram figcaption {
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-5);
+}
+
+/* Mermaid is pre-rendered to SVG at build time, at the natural width its own
+ * layout produced. The system map is far wider than this page's 75ch measure,
+ * so the figure breaks out of the column to the window width and scrolls
+ * horizontally past that — a legible diagram you drag beats an illegible one
+ * that fits. `margin-left: 50%` + `translateX(-50%)` centres it on the
+ * viewport, because <main> is itself centred. */
+.diagram {
+  width: min(96vw, 1500px);
+  margin: 1.8em 0 1.8em 50%;
+  transform: translateX(-50%);
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow-x: auto;
+}
+
+.diagram svg {
+  display: block;
+  margin: 0 auto;
+  height: auto;
+  max-width: none; /* mermaid's own inline max-width is cleared in build.mjs */
+}
+
+.diagram-fallback { border-color: var(--warn-border); }
+.diagram-fallback figcaption { margin: 0 0 0.6rem; color: var(--warn); }
+.diagram-fallback pre { margin-bottom: 0; }
+
+/* ------------------------------------------------------- evidence index */
+
+.doc-list { list-style: none; padding: 0; }
+
+.doc-list li {
+  margin: 0 0 1.4rem;
+  padding: 1rem 1.1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.doc-title { font-size: 1.05rem; font-weight: 600; }
+.doc-summary { margin: 0.45rem 0 0.4rem; color: var(--text-3); font-size: 0.95rem; }
+.doc-path { margin: 0; font-size: 0.8rem; color: var(--text-5); }
+
+/* ---------------------------------------------------------------- footer */
+
+footer {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 1.6rem var(--pad);
+}
+
+footer p {
+  max-width: var(--measure);
+  margin: 0 auto 0.8rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--text-5);
+}
+
+footer strong { color: var(--text-3); }
+footer .meta { margin-bottom: 0; font-family: var(--mono); font-size: 0.8rem; }
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 34rem) {
+  :root { --pad: 1rem; }
+  body { line-height: 1.55; }
+  h1 { font-size: 1.55rem; }
+  h2 { font-size: 1.2rem; }
+  .topbar { position: static; }
+  .topbar nav { font-size: 0.85rem; column-gap: 0.9rem; }
+  .btn { width: 100%; text-align: center; }
+  table { font-size: 0.82rem; }
+  th, td { padding: 0.4rem 0.5rem; }
+  /* No room to break out of anything: the figure is the column, and the
+   * diagram inside it scrolls. */
+  .diagram { width: 100%; margin-left: 0; transform: none; padding: 0.6rem; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}

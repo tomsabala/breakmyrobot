@@ -16,7 +16,7 @@ measurement.
 | **Localization** | **AMCL** over `/scan`, against a map `slam_toolbox` built from the robot's own lidar | **ArduPilot EKF3** (IMU + SITL GPS) read over MAVROS; EKF origin measured per run, never assumed |
 | **Commanded by** | `/cmd_vel` velocity twist (velocity smoother output) | `SET_POSITION_TARGET_LOCAL_NED` position setpoints |
 | **Obstacle avoidance** | global + local costmaps, Nav2 recoveries | **none** — global replanning every 5 s sim, nothing reactive in between |
-| **Interventions** | 6 of 6 | 5 of 6 — `scan_degradation` is *refused* with a reason: nothing in its stack consumes the lidar |
+| **Interventions** | 6 of 6 | 6 of 6 — but `scan_degradation` reaches only this platform's global costmap; the autopilot's control loop never reads the lidar, and the profile says so verbatim when the fault activates |
 | **Measured result** | reaches a goal through a 0.70 m doorway, 0.03–0.11 m from it, 0 collisions | completes a straight corridor (8 of 9 runs, 0.55 m error); plans a turning route and follows it, then wedges in a 0.9 m doorway and ends `mavros:stalled_no_progress` |
 
 Simulator: Gazebo Harmonic, ROS 2 Humble, one authored world (`ral_apartment`).
@@ -108,11 +108,11 @@ rewrites the document.
 | Document | Produced by | What it establishes |
 | --- | --- | --- |
 | [`docs/nav-closed-loop.md`](docs/nav-closed-loop.md) | `scripts/checks/roomba_nav_check.sh` | 12 checks on the Roomba's map/AMCL/Nav2 loop: map hash matched to its alignment, truth reaching no navigation component, AMCL differing from truth at every sample (mean 0.069 m) while staying localized, the body physically threading the 0.70 m doorway, commands inside the configured envelope |
-| [`docs/car-closed-loop.md`](docs/car-closed-loop.md) | `scripts/checks/car_nav_check.sh` | 13 checks on the car's SITL/MAVROS/EKF3 loop: the FCU's own `wp_dist` ending the mission, the EKF origin measured per run (0.0000 m residual against this harness's own derivation), the measured minimum turning radius, max achieved speed 0.966 m/s against 1.0 configured |
+| [`docs/car-closed-loop.md`](docs/car-closed-loop.md) | `scripts/checks/car_nav_check.sh` | 13 checks on the car's SITL/MAVROS/EKF3 loop: the FCU's own `wp_dist` ending the mission, the EKF origin measured per run (0.0000 m residual against this harness's own derivation), the measured minimum turning radius, max achieved speed 0.964 m/s against 1.0 configured. The 2026-11-05 run **fails check 11** — max \|EKF3 − truth\| 2.10 m against a 1.0 m limit, mean 0.21 m over 65 pairs — which is consistent with the MAVROS stall-and-flush measured in the car's repeatability doc rather than with a lost vehicle (check 8 put truth 0.258 m from the goal). It is published as the harness wrote it: re-running until a result agrees is not how this repository treats one |
 | [`docs/repeatability-baseline_roomba.md`](docs/repeatability-baseline_roomba.md), [`docs/repeatability-baseline_car.md`](docs/repeatability-baseline_car.md) | `scripts/checks/repeatability_check.sh` | the spread of each baseline over three runs, with provenance (image, `git_sha`, `git_dirty`, map hash) per run |
 | [`docs/gate.md`](docs/gate.md) | `scripts/gate.sh` | the rendering/physics settings every later phase inherits, the lidar checked against scene arithmetic, and the lockstep measurement the car's clock depends on |
 | [`docs/roomba-teleop-loop.md`](docs/roomba-teleop-loop.md) | `scripts/checks/roomba_teleop_check.sh` | the first closed loop: the robot, the world, the bridge and commands in / motion out, before any map or planner existed |
-| [`docs/engineering-log.md`](docs/engineering-log.md) | — | decisions a measurement forced: the DWB → RPP controller swap, the car's planner and its pure-pursuit carrot check, the bring-up race conditions, and why `scan_degradation` is refused for the car |
+| [`docs/engineering-log.md`](docs/engineering-log.md) | — | decisions a measurement forced: the DWB → RPP controller swap, the car's planner and its pure-pursuit carrot check, the bring-up race conditions, and the stale fault refusal the car's planner invalidated |
 
 Artifacts themselves (`runs/`, `logs/`) are **not** committed — the bags are
 large — so the run identifiers above name artifacts on the machine that produced
@@ -191,9 +191,10 @@ scripts/run_scenario.sh scan_degraded_roomba # ~100 s wall; writes runs/<id>/
 
 A run directory holds `run.json`, `env.json` (image, `git_sha`, `git_dirty`, map
 hash, scenario hash), `events.jsonl`, the rosbag, `metrics.json` and `plot.png`.
-Thirteen scenarios are committed under
+Fourteen scenarios are committed under
 `ros2_ws/src/ral_eval/scenarios/`, covering both robots, obstacles, lidar
-degradation, mobility faults, kidnap and an unreachable goal.
+degradation on each platform, mobility faults, kidnap, an unreachable goal and
+a negative control that must be refused pre-flight.
 
 The operator console:
 
@@ -213,7 +214,31 @@ is auditable with the same tools.
 `VITE_RAL_SOURCE=mock npm run dev` runs the console against a recorded fixture
 with no container and no stack; the top bar reads `MOCK` instead of `LIVE`.
 
-The test suite needs no simulator and runs in the same image — **272 tests,
+### The public site and the replay console
+
+The same console runs with **no backend at all**, driven by a recording of a
+real run exported from its rosbag:
+
+```bash
+scripts/export_replay.sh runs/scan_degraded_roomba_20261105T085234Z  # -> dashboard/public/replay/
+scripts/build_site.sh                                                # -> site/dist/
+```
+
+`export_replay` re-encodes a run's bag with the gateway's **own** encoders, so
+a replayed frame is the payload the live gateway would have published, and it
+records its decimation rules and the run's provenance in the file. The console
+then badges itself `REPLAY`, names the run it is playing, refuses every control
+path with a message saying there is no stack behind it, and offers play/pause,
+speed and scrub (a backwards seek rebuilds state from the recording's start, so
+a scrubbed view is the same fold as a played one).
+
+`scripts/build_site.sh` renders this README and `docs/*.md` into a static site
+with that console under `console/`, pre-rendering the mermaid diagrams at build
+time so a visitor downloads no JavaScript outside the console itself. Deploy
+`site/dist/` to any static host at any base path; see
+[`site/README.md`](site/README.md).
+
+The test suite needs no simulator and runs in the same image — **287 tests,
 0 failures**, measured 2026-11-05 — including the Nav2 parameter contract
 (`ral_bringup/test/test_nav2_contract.py`), which asserts that the velocity and
 acceleration overrides this plant depends on are actually in force rather than

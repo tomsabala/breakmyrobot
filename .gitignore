@@ -12,6 +12,13 @@ dashboard/node_modules/
 dashboard/dist/
 dashboard/.vite/
 
+# The public static site. `site/build.mjs`, `site/template.mjs`,
+# `site/assets/` and `site/content/` ARE tracked; the bundle under site/dist/
+# is rendered from the repository's own markdown by scripts/build_site.sh and
+# is reproducible from a fresh clone, so it is not committed.
+site/node_modules/
+site/dist/
+
 # colcon
 ros2_ws/build/
 ros2_ws/install/

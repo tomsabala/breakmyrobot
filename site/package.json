@@ -1,0 +1,15 @@
+{
+  "name": "ral-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Build-time generator for the public static site. Nothing here ships to the browser.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "marked": "^18.1.3",
+    "mermaid": "^11.12.0",
+    "puppeteer-core": "^24.0.0"
+  }
+}

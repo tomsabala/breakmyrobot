@@ -1,0 +1,22 @@
+<!--
+  The landing page's only hand-written body copy.
+
+  {{title}} and {{tagline}} are substituted from README.md's own H1 and first
+  paragraph, and those two tokens are then DROPPED from the rendered README
+  below, so the hero cannot drift from the repository: editing the README edits
+  this hero. {{up}} is the relative prefix to site/dist/ (empty on this page;
+  kept so the file stays position-independent).
+-->
+<section class="hero">
+  <h1>{{title}}</h1>
+  <p class="tagline">{{tagline}}</p>
+  <p class="cta">
+    <a class="btn btn-primary" href="{{up}}console/index.html">Open the replay console</a>
+    <a class="btn" href="{{up}}architecture.html">How it is built</a>
+    <a class="btn" href="{{repo}}" rel="noreferrer noopener">Source on GitHub</a>
+  </p>
+  <p class="hero-note">The console replays a recorded run from its rosbag: the
+  frames below the top bar are the ones the live gateway published, decimated
+  and exported, not a re-simulation and not an animation. It has no backend, so
+  nothing on this page can start a stack or inject a fault.</p>
+</section>
