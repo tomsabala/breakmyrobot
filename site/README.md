@@ -62,7 +62,31 @@ the build machine; `RAL_SITE_MERMAID=source` is the escape hatch. (A CDN
 `<script src="https://…">` is not an option — this project bundles its assets,
 including the console's fonts.)
 
-## Deploy
+## Where it is published
+
+**<https://apps.tom-sabala.dev/#breakmyrobot>**, as a container on that
+gateway's own terms rather than as files copied into it. The pattern is the
+one every other app there follows:
+
+1. `.github/workflows/apps-image.yml` builds `site/dist` on a runner (which
+   has the Chrome the diagrams need) and pushes
+   `ghcr.io/tomsabala/breakmyrobot:apps-mount-<sha>` — one immutable tag per
+   commit, because the gateway's `deploy.sh` refuses a moving one.
+2. `docker/app/Dockerfile` puts that build behind Caddy on port 8080, serving
+   it at `/a/breakmyrobot/` — the gateway does **not** strip the service
+   prefix, so the container has to answer underneath it.
+3. The gateway's `frontend/src/apps/apps.json` pins the tag as a
+   `kind: "service"`, `mode: "shared"` entry: one warm container for everyone,
+   because this site stores nothing per visitor.
+4. On the VPS, `gateway/deploy.sh` pulls that tag and the broker starts it on
+   the first request.
+
+Measured on the built image, started the way the broker starts one
+(`--cap-drop ALL --security-opt no-new-privileges:true --memory 64m
+--read-only`): healthy, **12 MiB of RSS**, 56 MB on disk, `/healthz` 200,
+every document and the console's replay fixture served under the prefix.
+
+## Deploy it anywhere else
 
 `site/dist/` is static and **position-independent**: every URL it emits is
 relative to the document. Both layouts were crawled over HTTP during

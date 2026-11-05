@@ -1,0 +1,99 @@
+# Publish the public site as a container image apps.tom-sabala.dev can run.
+#
+# The gateway over there never builds and never pulls on demand: `apps.json`
+# pins an immutable tag, `gateway/deploy.sh --images-only` pulls exactly what
+# the manifest names and refuses a moving tag, and the broker starts what is
+# already on the box. So this workflow's only job is to produce one tag per
+# commit and push it, and the tag convention is the one the other apps on that
+# gateway already use: `apps-mount-<full sha>`.
+#
+# WHAT IS IN THE IMAGE: `site/dist` only - the rendered documents, the measured
+# evidence and the operator console in REPLAY mode. Not the lab: ROS 2, Gazebo
+# and ArduPilot SITL stay in `ral:dev`, which is 6.11 GB, needs a GPU-ish host
+# and admits one operator at a time.
+#
+# The site is built HERE rather than inside the Dockerfile because
+# `scripts/build_site.sh` pre-renders the mermaid diagrams in a headless
+# Chrome. A runner has one; an app image has no business carrying one.
+
+name: apps image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'docs/**'
+      - 'site/**'
+      - 'dashboard/**'
+      - 'docker/app/**'
+      - '.github/workflows/apps-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: apps-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `scripts/build_site.sh` builds dashboard/ (Vite) and then renders the
+      # documents, driving the runner's preinstalled Chrome for the diagrams.
+      # RAL_SITE_CHROME is explicit rather than discovered: a silent fallback
+      # to RAL_SITE_MERMAID=source would publish a site whose architecture
+      # page shows diagram SOURCE instead of diagrams, and nothing downstream
+      # would notice.
+      - name: Build the site
+        env:
+          RAL_SITE_CHROME: /usr/bin/google-chrome
+        run: bash scripts/build_site.sh
+
+      # Fail here rather than ship a hollow image: the console and its replay
+      # fixtures are the point of publishing this at all.
+      - name: Check the build has what the image needs
+        run: |
+          set -euo pipefail
+          test -f site/dist/index.html
+          test -f site/dist/architecture.html
+          test -f site/dist/console/index.html
+          test -s site/dist/console/replay/index.json
+          test "$(find site/dist -name '*.html' | wc -l)" -ge 10
+          grep -q 'diagram-light' site/dist/architecture.html
+          du -sh site/dist
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One immutable tag per commit, and `latest` purely for a human pulling
+      # it by hand - the manifest must never point at a moving tag, and
+      # deploy.sh refuses one.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/app/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/breakmyrobot:apps-mount-${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/breakmyrobot:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: false
+
+      # The line to paste into apps.json, printed where the deploy is decided.
+      - name: Manifest line
+        run: |
+          echo "::notice title=Pin this image in apps.json::\"image\": \"ghcr.io/${{ github.repository_owner }}/breakmyrobot:apps-mount-${{ github.sha }}\""

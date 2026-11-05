@@ -3,6 +3,11 @@
 **Two genuinely different ground robots, each driven by a real autonomy stack,
 navigating a simulated apartment while an operator breaks things mid-mission.**
 
+**Live:** <https://apps.tom-sabala.dev/#breakmyrobot> — the operator console
+replaying a recorded run, beside the measured evidence. It is a recording:
+static files, no robot and no simulator behind them, and the console says so
+in a banner it cannot be dismissed from.
+
 Every figure below was produced by a harness in this repository and names the
 artifact it came from. Where something does not work, it says so and gives the
 measurement.
@@ -235,9 +240,16 @@ a scrubbed view is the same fold as a played one).
 `scripts/build_site.sh` renders this README and `docs/*.md` into a static site
 with that console under `console/`, pre-rendering the mermaid diagrams at build
 time in both themes, so the only JavaScript a visitor loads outside the console
-is the ~25 inline lines that remember a light/dark choice. Deploy
-`site/dist/` to any static host at any base path; see
-[`site/README.md`](site/README.md).
+is the ~25 inline lines that remember a light/dark choice.
+
+**It is published at <https://apps.tom-sabala.dev/#breakmyrobot>** (direct:
+`/a/breakmyrobot/`). `docker/app/Dockerfile` packages `site/dist` behind Caddy
+on port 8080, `.github/workflows/apps-image.yml` publishes it to
+`ghcr.io/tomsabala/breakmyrobot:apps-mount-<sha>` on every push that touches
+the site, and that tag is pinned in the gateway's `apps.json`. The image is the
+site and nothing else — no ROS, no Gazebo, no autopilot: ~56 MB, measured
+12 MiB of RSS under a 64 MB ceiling. `site/dist/` is equally deployable to any
+static host at any base path; see [`site/README.md`](site/README.md).
 
 The test suite needs no simulator and runs in the same image — **287 tests,
 0 failures**, measured 2026-11-05 — including the Nav2 parameter contract

@@ -1,0 +1,71 @@
+# The site, served where apps.tom-sabala.dev's broker will ask for it.
+#
+# Caddy rather than nginx because the gateway this image is deployed into runs
+# Caddy, and `gateway/caddy/launcher-static.caddy` over there is already the
+# house pattern for serving a static build - including the cache policy below,
+# which is lifted from it rather than reinvented. One config language on that
+# box, and a precedent for the next person.
+#
+# THE PREFIX IS NOT STRIPPED BY THE GATEWAY. `gateway/broker/lib/paths.mjs`
+# keeps `/a/<slug>` in the proxied target "because the app image is built with
+# basePath=/a/<slug>, so the container expects to see its own prefix". This
+# site has no build-time base path to bake in - every URL it emits is relative
+# - so `handle_path` strips the prefix here and serves the same files beneath
+# it. That is the only place the slug appears.
+#
+# Port 8080 and an unprivileged user: the broker starts every instance with
+# `CapDrop: ALL`, so binding 80 would mean handing CAP_NET_BIND_SERVICE back
+# for nothing.
+
+{
+	admin off
+	auto_https off
+	persist_config off
+	log {
+		output stderr
+		format console
+		level WARN
+	}
+}
+
+:8080 {
+	encode zstd gzip
+
+	# The image's HEALTHCHECK and the broker's `readyPath` both land here. It
+	# is outside the site tree on purpose: it answers whether the server is
+	# up, independently of any file being where it is expected.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle_path /a/breakmyrobot/* {
+		root * /srv/site
+
+		# Vite names every asset with a content hash, so those can never change
+		# meaning and are immutable for a year. The documents that NAME them
+		# must revalidate, or a deploy stays invisible on a machine that
+		# already has the page. The two matchers are mutually exclusive
+		# deliberately: two `header` directives setting the same field apply in
+		# wrapping order, so a bare default plus a narrower override silently
+		# keeps the default.
+		# `@documents` is a named matcher of its own and not `not @assets`
+		# inline: a `not` token in a directive line cannot reference a named
+		# matcher, and Caddy accepts the line while matching nothing.
+		# MEASURED on the built image before this: assets carried the
+		# immutable header and index.html carried no Cache-Control at all,
+		# which is the browser-heuristic-freshness case this exists to avoid.
+		@assets path /assets/* /console/assets/*
+		@documents not path /assets/* /console/assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		header @documents Cache-Control "no-cache"
+
+		file_server
+	}
+
+	# A visitor who reaches the container directly - `docker run -p`, or a
+	# route that lost its prefix - is pointed at the site rather than given a
+	# bare 404 from a path that does not exist inside this image.
+	redir / /a/breakmyrobot/ 302
+
+	respond 404
+}
