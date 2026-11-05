@@ -128,7 +128,7 @@ come from one file per platform:
 `ros2_ws/src/ral_bringup/config/robots/<robot>.yaml`.
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph SIM["Gazebo Harmonic · ral_apartment"]
     LIDAR["lidar 360 @ 10 Hz"]
     BODY["body + wheels + bumper"]

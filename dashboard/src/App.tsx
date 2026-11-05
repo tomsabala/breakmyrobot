@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Console } from './console/Console';
+import { ModeBanner } from './console/ModeBanner';
 import { Inspector } from './inspector/Inspector';
 import { useRal } from './client/useRal';
 import { C, F } from './theme/tokens';
@@ -68,6 +69,17 @@ scripts/dashboard.sh against the current ros2_ws/install.`}
     );
   }
 
-  if (screen === 'console') return <Console ral={ral} go={go} />;
-  return <Inspector ral={ral} screen={screen} go={go} />;
+  // Above BOTH screens, outside the screen switch: the Run Inspector is as
+  // reachable from a public link as the console is, and a recording must be
+  // marked wherever it is read.
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <ModeBanner source={ral.source} />
+      <div style={{ flex: '1 1 auto', minHeight: 0 }}>
+        {screen === 'console'
+          ? <Console ral={ral} go={go} />
+          : <Inspector ral={ral} screen={screen} go={go} />}
+      </div>
+    </div>
+  );
 }

@@ -595,22 +595,27 @@ main > .shot {
   text-align: center;
 }
 
-/* A pre-rendered diagram keeps the natural width its own layout produced: the
- * system map is far wider than the text measure, so the figure spans the full
- * grid and scrolls horizontally past that. A legible diagram you drag beats an
- * illegible one that fits. */
-.diagram {
-  margin: 2.5em 0;
-  padding: 1.25rem var(--gutter);
-  border-block: 1px solid var(--line);
+
+/* The figure takes the same wide track as plots and tables, and the diagram
+ * inside it scales DOWN to that width rather than overflowing it. It used to
+ * be pinned to its natural width inside a scrolling box, which on a 2586 px
+ * system map meant a reader saw a third of the graph and dragged for the
+ * rest. */
+main > .diagram {
+  grid-column: full;
+  justify-self: center;
+  width: min(68rem, 100% - 2 * var(--gutter));
+  margin: 2.5em auto;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   background: var(--bg-soft);
-  overflow-x: auto;
 }
 
 .diagram svg {
   display: block;
   height: auto;
-  max-width: none;
+  max-width: 100%;
   margin: 0 auto;
 }
 

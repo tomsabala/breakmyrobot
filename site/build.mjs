@@ -402,21 +402,32 @@ function diagramFigure(lightSvg, darkSvg) {
   const prepare = (svg, cls) => {
     const vb = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svg);
     const width = vb ? Math.ceil(parseFloat(vb[1])) : 0;
+    // The width attribute keeps the diagram's natural size as its UPPER
+    // bound, and the inline max-width lets it scale down to the column
+    // instead of running off it. Mermaid's own `max-width: <n>px` is
+    // replaced rather than kept, because it is computed from the diagram
+    // and not from the page. MEASURED before this: the system map rendered
+    // at its natural 2586 px inside a 1088 px figure, so a reader saw a
+    // third of a graph and had to drag for the rest - which is exactly the
+    // complaint that produced this change. The diagrams were also split and
+    // reoriented (docs/architecture.md section 1.3) so that none of them is
+    // now much wider than the column it is read in.
     const sized = width
       ? svg.replace(/\bwidth="100%"/, `width="${width}"`)
-        .replace(/\bstyle="max-width:[^"]*"/, 'style="max-width:none"')
+        .replace(/\bstyle="max-width:[^"]*"/, 'style="max-width:100%;height:auto"')
       : svg;
     return { svg: addSvgClass(sized, cls), width };
   };
   const light = prepare(lightSvg, 'diagram-svg diagram-light');
   const dark = prepare(darkSvg, 'diagram-svg diagram-dark');
   const width = Math.max(light.width, dark.width);
-  // 1500 px is the stylesheet's cap on .diagram; below it nothing scrolls on a
-  // desktop, and the phone breakpoint scrolls everything anyway.
-  const hint = width > 1400
-    ? `<figcaption>${width} px wide — scroll the diagram sideways to read it.</figcaption>\n`
+  // The figure is capped at 68rem (1088 px). A diagram wider than that is
+  // shown scaled down, so the caption states its natural size: a reader who
+  // finds the labels small knows to zoom rather than wondering whether the
+  // picture is cropped.
+  const hint = width > 1100
+    ? `<figcaption>Natural size ${width} px wide — scaled to fit; zoom to read the labels.</figcaption>\n`
     : '';
-  // Light first, dark second; the stylesheet shows exactly one of the pair.
   return `<figure class="diagram" role="img">\n${light.svg}\n${dark.svg}\n${hint}</figure>\n`;
 }
 

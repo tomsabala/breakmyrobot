@@ -60,29 +60,67 @@ directory — launch files pass the path
 
 ### 1.3 Processes per robot
 
+Two diagrams rather than one: the plane both robots share, and then the stack
+each one runs. Drawn together they are one graph 2,586 px wide, which is a
+picture nobody reads.
+
+**The shared plane** — simulator, bridges, the truth path and the fault path.
+Everything here exists for both platforms and is identical for both.
+
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph SIM["gz Harmonic · ral_apartment · 0.002 s step"]
-    LIDAR["gpu_lidar 360 beams at 10 Hz<br/>topic scan_raw"]
-    BODY["body · wheels · bumper contact<br/>PosePublisher"]
+    LIDAR["gpu_lidar<br/>360 beams at 10 Hz"]
+    BODY["body · wheels<br/>bumper contact"]
   end
 
   BR["ros_gz_bridge<br/>bridge_robot_world.yaml"]
+  RELAY["scan_fault_relay<br/>sole publisher of /scan"]
   GT["ground_truth_node<br/>no TF broadcaster"]
   FM["fault_manager<br/>6 services · FaultEvent lifecycle"]
   FB["ros_gz_fault_bridge<br/>create · remove · set_pose · wrench"]
-  RELAY["scan_fault_relay<br/>sole publisher of /scan"]
+  STACK(["the robot's own stack<br/>see the next diagram"])
+  RUN["run_scenario / dashboard_api<br/>MissionNode + MissionDriver"]
+  REC["rosbag2 recorder<br/>metrics.json · plot.png"]
 
-  subgraph ROOMBA["roomba — Nav2 closes the loop"]
+  LIDAR -->|scan_raw| BR
+  BODY -->|pose · contacts| BR
+  BR -->|/scan_raw| RELAY
+  BR -->|/ground_truth/tf| GT
+  RELAY -->|/scan| STACK
+  RELAY -->|/scan| REC
+  FM -->|set_degradation| RELAY
+  FM --> FB
+  FB -->|gz services| SIM
+  GT -->|/ground_truth/odom| FM
+  GT -->|/ground_truth/odom| REC
+  RUN -->|goal| STACK
+  RUN -->|interventions| FM
+  STACK -->|actuation| BR
+  STACK -->|estimate · plan · state| REC
+```
+
+**The two stacks**, side by side. The Roomba's loop closes inside Nav2 in
+ROS; the car's closes inside the autopilot, with MAVROS as the only link and
+Nav2 contributing global planning alone.
+
+```mermaid
+flowchart TB
+  SCAN(["/scan from the relay"])
+  GOAL(["goal from MissionNode"])
+
+  subgraph ROOMBA["roomba — Nav2 closes the loop at 20 Hz"]
+    direction TB
     AMCL["nav2_amcl"]
     CM["global + local costmap"]
-    PLN["planner_server NavfnPlanner"]
+    PLN["planner_server<br/>NavfnPlanner"]
+    BT["bt_navigator<br/>behavior_server"]
     CTL["controller_server<br/>RotationShim + RPP"]
-    BT["bt_navigator · behavior_server"]
     VS["velocity_smoother"]
   end
 
-  subgraph CAR["car — ArduRover closes the loop"]
+  subgraph CAR["car — ArduRover closes the loop in firmware"]
+    direction TB
     PL2["map_server + planner_server<br/>SmacPlannerHybrid · global only"]
     DRV["mavros_driver<br/>carrot · replan 5 s sim"]
     MAV["mavros_node"]
@@ -90,36 +128,26 @@ flowchart LR
     EKFTF["ekf_local_tf<br/>measures the EKF origin"]
   end
 
-  RUN["run_scenario / dashboard_api<br/>MissionNode + MissionDriver"]
-  REC["rosbag2 recorder<br/>metrics.json · plot.png"]
+  OUT1(["/cmd_vel to the bridge"])
+  OUT2(["servo / sensor JSON to gz"])
 
-  LIDAR --> BR
-  BODY --> BR
-  BR -->|/scan_raw| RELAY
-  BR -->|/ground_truth/tf| GT
-  RELAY -->|/scan| AMCL
-  RELAY -->|/scan| CM
-  RELAY -->|/scan| PL2
-  RELAY -->|/scan| REC
-  FM -->|set_degradation| RELAY
-  FM --> FB
-  FB --> SIM
-  GT -->|/ground_truth/odom| FM
-  GT -->|/ground_truth/odom| EKFTF
-  GT -->|/ground_truth/odom| REC
-  AMCL -->|/amcl_pose| RUN
+  SCAN --> AMCL
+  SCAN --> CM
+  SCAN --> PL2
+  GOAL -->|NavigateToPose| BT
+  GOAL --> DRV
+  AMCL -->|/amcl_pose| BT
   CM --> PLN
-  PLN --> CTL
+  PLN --> BT
   BT --> CTL
   CTL --> VS
-  VS -->|/cmd_vel| BR
-  RUN -->|NavigateToPose| BT
+  VS --> OUT1
   PL2 -->|/compute_path_to_pose| DRV
   DRV -->|setpoint_position/local| MAV
   MAV <-->|MAVLink UDP| FCU
-  FCU <-->|servo / sensor JSON| BODY
   MAV -->|local_position/odom| DRV
-  RUN --> DRV
+  FCU --> OUT2
+  EKFTF -.->|world → ekf_local| DRV
 ```
 
 Launch files: `robot_sim.launch.py` (gz, bridge, `robot_state_publisher`,
