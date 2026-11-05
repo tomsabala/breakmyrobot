@@ -55,6 +55,7 @@ import json
 import math
 import os
 import sys
+import textwrap
 
 import matplotlib
 from ral_eval.bagio import ral_stamp, read_bag, stamp_of, truth_track
@@ -343,9 +344,20 @@ def write_plot(run_dir: str) -> str:
                                f'{entry["value"]:.3f} m (map + alignment error; '
                                'not a bound)')
         else:
-            axis.annotate(f'start-pose residual: not measured ({entry["reason"]})',
-                          (0.02, 0.92), xycoords='axes fraction', fontsize=8,
-                          color='#AA0000', wrap=True)
+            # textwrap, not annotate(wrap=True): matplotlib wraps against the
+            # FIGURE edge, and this text starts inside the right-hand subplot,
+            # so a long `reason` (the car's is ~250 characters) runs out over
+            # panel B's title and the figure suptitle instead of folding.
+            # MEASURED on runs/ui_car_20261026T224207Z before this change: the
+            # reason overprinted both. Anchored below the legend strip with
+            # va='top' so the block grows DOWNWARD into the panel rather than
+            # upward through the title, and does not overprint the legend.
+            axis.text(0.02, 0.84,
+                      textwrap.fill(
+                          f'start-pose residual: not measured '
+                          f'({entry["reason"]})', 64),
+                      transform=axis.transAxes, va='top', ha='left',
+                      fontsize=7, color='#AA0000')
     else:
         _empty(axis, f'no estimate/truth pair within {STAMP_MATCH_S * 1000:.0f} ms')
     axis.set_title('B. estimate error vs sim time' if have_window else
