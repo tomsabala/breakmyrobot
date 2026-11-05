@@ -54,8 +54,10 @@ never silent omissions.
 renders them to inline SVG in a headless Chrome **at build time**, rather than
 vendoring `mermaid.min.js` into `assets/`. That bundle is 3.5 MB of JavaScript
 to draw diagrams that cannot change after the build, and without it the diagrams
-are missing. Pre-rendering ships **zero JavaScript on the whole site** outside
-`console/`, and the diagrams are in the HTML. The price is a Chrome binary on
+are missing. Pre-rendering ships **no JavaScript bundle at all** outside
+`console/`, and the diagrams are in the HTML — in both palettes, so the theme
+toggle swaps between two pre-rendered SVGs rather than re-laying-out a graph in
+the reader's browser. The price is a Chrome binary on
 the build machine; `RAL_SITE_MERMAID=source` is the escape hatch. (A CDN
 `<script src="https://…">` is not an option — this project bundles its assets,
 including the console's fonts.)
@@ -87,8 +89,11 @@ python3 -m http.server -d site/dist 8080      # local check
 In:
 
 - `index.html`, `architecture.html`, `evidence/*.html` — rendered markdown.
-- `assets/style.css` — one hand-written stylesheet. No webfont, no framework,
-  no JavaScript. System font stack.
+- `assets/style.css` — one hand-written stylesheet, two themes (dark, light,
+  `prefers-color-scheme` by default). No webfont, no framework. System font
+  stack. The only JavaScript on a document page is two inline blocks totalling
+  ~25 lines: one in `<head>` that applies a stored theme before first paint, one
+  at the end that handles the toggle and stores the choice in `localStorage`.
 - `media/*.png` — the plots and screenshots from `docs/media/`.
 - `console/` — the operator dashboard's own Vite build (with its bundled IBM
   Plex fonts), compiled with `VITE_RAL_SOURCE=replay`, plus

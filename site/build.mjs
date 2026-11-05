@@ -10,10 +10,12 @@
 // Chrome that is already on the build machine. The alternative — vendoring
 // mermaid.min.js into assets/ — costs 3.5 MB of JavaScript per visitor to draw
 // two static diagrams that never change after the build, and makes the diagrams
-// disappear without JS. Pre-rendering ships zero JavaScript on the whole site
+// disappear without JS. Pre-rendering ships no JavaScript bundle on the site
 // and the diagrams are in the HTML. The cost is a build-time dependency on a
 // Chrome binary; `RAL_SITE_MERMAID=source` degrades to a labelled source block
-// instead of failing, for a build host without one.
+// instead of failing, for a build host without one. Each diagram is rendered
+// once per theme — mermaid bakes its colours into the SVG, and the reader
+// picks the theme at runtime; see MERMAID_LIGHT/MERMAID_DARK below.
 //
 // Everything emitted is relative to the document: the site must serve from a
 // bucket root, from GitHub Pages' /<repo>/ prefix, or from a file:// checkout.
@@ -135,16 +137,49 @@ function findChrome() {
   return null;
 }
 
-/** Mermaid's dark theme, re-pointed at dashboard/src/theme/tokens.ts's palette. */
-const MERMAID_CONFIG = {
+/**
+ * Both palettes are rendered, because the reader picks the theme at runtime.
+ *
+ * Mermaid bakes its colours into the SVG it emits: a `<style>` block scoped to
+ * the diagram's own id, plus per-element `fill`/`stroke` attributes. There is
+ * no stylesheet hook to re-colour that from outside, so a single SVG driven by
+ * the site's CSS custom properties would mean rewriting mermaid's output —
+ * mapping its generated selectors and inline attributes onto var(--...) — and
+ * that rewrite breaks silently the first time mermaid changes a class name or
+ * moves a colour from the style block to an attribute. The other way out,
+ * re-rendering in the browser on theme change, puts mermaid's 3.5 MB bundle
+ * back on every visitor, which is the whole thing this build avoids.
+ *
+ * So: render twice at build time and let CSS show one. It costs two SVG bodies
+ * in the HTML (~40 KB gzipped across the site) and one extra mermaid layout
+ * pass per diagram in a browser session that is already open, and it cannot
+ * drift from what mermaid actually produces.
+ */
+
+/** Shared between the two palettes: layout, safety and typography are not themed. */
+const MERMAID_BASE = {
   startOnLoad: false,
-  theme: 'dark',
   securityLevel: 'strict',
   flowchart: { htmlLabels: false, curve: 'basis', padding: 10 },
+};
+
+const MERMAID_FONT =
+  'ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+/**
+ * Mermaid's dark theme, re-pointed at dashboard/src/theme/tokens.ts's palette.
+ *
+ * Keep this variable set and MERMAID_LIGHT's identical: mermaid derives every
+ * variable it is not given from the ones it is, so a key present in only one
+ * palette is a colour that silently falls back to a mermaid default there.
+ */
+const MERMAID_DARK = {
+  ...MERMAID_BASE,
+  theme: 'dark',
   themeVariables: {
     darkMode: true,
     background: '#1c1c1c',
-    fontFamily: 'ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    fontFamily: MERMAID_FONT,
     fontSize: '14px',
     primaryColor: '#262626',
     primaryTextColor: '#e6e6e6',
@@ -164,9 +199,42 @@ const MERMAID_CONFIG = {
 };
 
 /**
- * Render every mermaid source once, in one browser session.
+ * The same diagram for a near-white page. `base` is mermaid's themeable theme:
+ * `default` hard-codes its own lavender node fills, which read as decoration
+ * next to this site's greys. Fills stay just off the page background so a node
+ * is a surface rather than a hole, borders stay dark enough to survive a
+ * low-contrast laptop panel, and edges are darker than the borders so an arrow
+ * is never the faintest thing in the picture.
+ */
+const MERMAID_LIGHT = {
+  ...MERMAID_BASE,
+  theme: 'base',
+  themeVariables: {
+    darkMode: false,
+    background: '#ffffff',
+    fontFamily: MERMAID_FONT,
+    fontSize: '14px',
+    primaryColor: '#f4f5f7',
+    primaryTextColor: '#1b1d22',
+    primaryBorderColor: '#c9ccd3',
+    secondaryColor: '#e9ebef',
+    tertiaryColor: '#eef0f3',
+    mainBkg: '#f4f5f7',
+    nodeBorder: '#c9ccd3',
+    clusterBkg: '#eceef3',
+    clusterBorder: '#cdd1d9',
+    lineColor: '#6b7079',
+    textColor: '#1b1d22',
+    titleColor: '#1b1d22',
+    edgeLabelBackground: '#ffffff',
+    nodeTextColor: '#1b1d22',
+  },
+};
+
+/**
+ * Render every mermaid source twice — light and dark — in one browser session.
  * @param {string[]} sources
- * @returns {Promise<Map<string,string>>} source -> inline <svg> (or a labelled fallback)
+ * @returns {Promise<Map<string,string>>} source -> <figure> (or a labelled fallback)
  */
 async function renderMermaid(sources) {
   const out = new Map();
@@ -194,7 +262,7 @@ async function renderMermaid(sources) {
     throw new Error(`missing ${path.relative(REPO, bundle)} — run \`npm install\` in site/`);
   }
 
-  console.log(`  mermaid: pre-rendering ${sources.length} diagram(s) with ${exe}`);
+  console.log(`  mermaid: pre-rendering ${sources.length} diagram(s) × 2 themes with ${exe}`);
   const browser = await puppeteer.launch({
     executablePath: exe,
     headless: true,
@@ -204,34 +272,115 @@ async function renderMermaid(sources) {
     const tab = await browser.newPage();
     await tab.setContent('<!doctype html><html><body></body></html>');
     await tab.addScriptTag({ path: bundle });
-    await tab.evaluate((cfg) => { window.mermaid.initialize(cfg); }, MERMAID_CONFIG);
 
     for (const [i, src] of sources.entries()) {
       const result = await tab.evaluate(
-        async (id, text) => {
-          try {
-            const { svg } = await window.mermaid.render(id, text);
-            return { svg };
-          } catch (e) {
-            return { error: String((e && e.message) || e) };
+        async (text, jobs) => {
+          const svgs = {};
+          for (const job of jobs) {
+            try {
+              // initialize() rebuilds mermaid's site config from its defaults
+              // every call, so switching palette mid-session does not leave the
+              // previous one's variables behind.
+              window.mermaid.initialize(job.config);
+              const { svg } = await window.mermaid.render(job.id, text);
+              svgs[job.theme] = svg;
+            } catch (e) {
+              return { error: `${job.theme}: ${String((e && e.message) || e)}` };
+            }
           }
+          return { svgs };
         },
-        `ral-diagram-${i}`,
         src,
+        // Distinct ids per theme: mermaid scopes its <style> block and its
+        // marker/node ids to the id it is handed, and both copies land in the
+        // same document. Share the id and the first copy's style block restyles
+        // the second one — which is exactly the theme bleed this is avoiding.
+        [
+          { theme: 'light', id: `ral-diagram-${i}-light`, config: MERMAID_LIGHT },
+          { theme: 'dark', id: `ral-diagram-${i}-dark`, config: MERMAID_DARK },
+        ],
       );
       if (result.error) {
         // A diagram the repo's own markdown cannot render is a repo bug, not a
         // site bug: say so and keep the source visible rather than dropping it.
+        // One <pre>, not one per theme: the source text has no palette.
         warn(`mermaid diagram ${i} failed to render: ${result.error}`);
         out.set(src, mermaidFallback(src, `failed to render: ${result.error}`));
       } else {
-        out.set(src, diagramFigure(result.svg));
+        checkDiagramIsolation(result.svgs, i);
+        out.set(src, diagramFigure(result.svgs.light, result.svgs.dark));
       }
     }
   } finally {
     await browser.close();
   }
   return out;
+}
+
+/** Add a class to an SVG's root element, keeping whatever mermaid put there. */
+function addSvgClass(svg, cls) {
+  const end = svg.indexOf('>');
+  const open = svg.slice(0, end);
+  if (/\sclass="/.test(open)) {
+    return open.replace(/\sclass="([^"]*)"/, ` class="$1 ${cls}"`) + svg.slice(end);
+  }
+  return `<svg class="${cls}"${svg.slice(4)}`;
+}
+
+/**
+ * Nothing here renames mermaid's ids, because mermaid already scopes all of
+ * them: every `id=` it emits — the root `<svg>`, the arrowhead `<marker>`s,
+ * the drop-shadow filters, the gradient, each node, each edge path — starts
+ * with the id handed to `mermaid.render()`, every `url(#…)` reference points
+ * inside the same prefix, and every selector in its `<style>` block is
+ * `#<that-id> …`. Giving the two copies different render ids is therefore the
+ * whole isolation story: the light copy's style block cannot select into the
+ * dark one, and the dark copy's arrows cannot resolve to the light copy's
+ * markers through document-order id lookup.
+ *
+ * That is a property of mermaid's output, not a promise in its API, so the
+ * build checks it on every run instead of trusting it. The failure it guards
+ * against is silent — a diagram that quietly wears the other theme's colours —
+ * and a mermaid upgrade is exactly when it would appear.
+ *
+ * @param {{light: string, dark: string}} svgs the two raw renders
+ * @param {number} i the diagram's index, for the warning text
+ */
+function checkDiagramIsolation(svgs, i) {
+  const ids = {};
+  for (const [theme, svg] of Object.entries(svgs)) {
+    const root = /^<svg\b[^>]*?\sid="([^"]+)"/.exec(svg)?.[1];
+    if (!root) {
+      warn(`mermaid diagram ${i} (${theme}): the rendered <svg> carries no id to scope it`);
+      continue;
+    }
+    ids[theme] = new Set([...svg.matchAll(/(?<![-\w])id="([^"]+)"/g)].map((m) => m[1]));
+    const loose = [...ids[theme]].filter((id) => !id.startsWith(root));
+    if (loose.length) {
+      warn(`mermaid diagram ${i} (${theme}): ${loose.length} id(s) outside #${root}, ` +
+        `so the two themes can collide: ${loose.slice(0, 3).join(', ')}`);
+    }
+    // Selectors, split crudely on rule boundaries; at-rules (@keyframes and
+    // the `from`/`to`/`50%` inside them) are global by construction and carry
+    // no colour, so they are not a bleed path.
+    const style = /<style>([\s\S]*?)<\/style>/.exec(svg)?.[1] ?? '';
+    const unscoped = style.split('}')
+      .map((rule) => rule.split('{')[0])
+      .flatMap((sel) => sel.split(','))
+      .map((sel) => sel.trim())
+      .filter((sel) => sel && !sel.startsWith(`#${root}`) && !sel.startsWith('@')
+        && !/^(from|to|[\d.]+%)$/.test(sel));
+    if (unscoped.length) {
+      warn(`mermaid diagram ${i} (${theme}): ${unscoped.length} style rule(s) not scoped to ` +
+        `#${root}, so one theme can restyle the other: ${unscoped.slice(0, 3).join(', ')}`);
+    }
+  }
+  const shared = ids.light && ids.dark ? [...ids.light].filter((id) => ids.dark.has(id)) : [];
+  if (shared.length) {
+    warn(`mermaid diagram ${i}: light and dark share ${shared.length} id(s) in one document: ` +
+      `${shared.slice(0, 3).join(', ')}`);
+  }
 }
 
 /**
@@ -242,20 +391,33 @@ async function renderMermaid(sources) {
  * the figure scroll instead; shrinking a diagram is not a way to show it.
  * Past the width the stylesheet can give the figure, say that it scrolls,
  * because a horizontal scrollbar inside a page is easy to miss.
+ *
+ * Both copies get the same treatment at their own measured width: the two
+ * renders differ only in colour, so the widths agree, but pinning each to what
+ * its own layout produced means a future palette that changes metrics (a
+ * different font, say) still gets a correctly sized diagram rather than a
+ * scaled one. The scroll hint uses the wider of the two.
  */
-function diagramFigure(svg) {
-  const vb = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svg);
-  const width = vb ? Math.ceil(parseFloat(vb[1])) : 0;
-  const sized = width
-    ? svg.replace(/\bwidth="100%"/, `width="${width}"`)
-      .replace(/\bstyle="max-width:[^"]*"/, 'style="max-width:none"')
-    : svg;
+function diagramFigure(lightSvg, darkSvg) {
+  const prepare = (svg, cls) => {
+    const vb = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(svg);
+    const width = vb ? Math.ceil(parseFloat(vb[1])) : 0;
+    const sized = width
+      ? svg.replace(/\bwidth="100%"/, `width="${width}"`)
+        .replace(/\bstyle="max-width:[^"]*"/, 'style="max-width:none"')
+      : svg;
+    return { svg: addSvgClass(sized, cls), width };
+  };
+  const light = prepare(lightSvg, 'diagram-svg diagram-light');
+  const dark = prepare(darkSvg, 'diagram-svg diagram-dark');
+  const width = Math.max(light.width, dark.width);
   // 1500 px is the stylesheet's cap on .diagram; below it nothing scrolls on a
   // desktop, and the phone breakpoint scrolls everything anyway.
   const hint = width > 1400
     ? `<figcaption>${width} px wide — scroll the diagram sideways to read it.</figcaption>\n`
     : '';
-  return `<figure class="diagram" role="img">\n${sized}\n${hint}</figure>\n`;
+  // Light first, dark second; the stylesheet shows exactly one of the pair.
+  return `<figure class="diagram" role="img">\n${light.svg}\n${dark.svg}\n${hint}</figure>\n`;
 }
 
 function mermaidFallback(src, reason) {

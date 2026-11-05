@@ -1,12 +1,19 @@
 /* The whole site's stylesheet. One file, hand-written, no framework, no build
  * step of its own; site/build.mjs copies it to dist/assets/style.css.
  *
- * The palette is dashboard/src/theme/tokens.ts, so the documents and the
- * console they link to read as one system. The five provenance colours keep
- * their meaning here too — red is simulator truth, blue the robot's estimate,
- * green a plan, orange an operator command, magenta a fault — which is why
- * none of them is used as a decorative accent on this site. Links take the
- * console's --link blue, and nothing else is coloured.
+ * TWO THEMES. Every colour is a semantic token (--bg, --text, --accent, ...)
+ * resolved from one of two palettes declared once each as --d-* (dark) and
+ * --l-* (light). The mapping from palette to token appears twice, because a
+ * media query and an attribute selector cannot be combined into one rule: once
+ * under `prefers-color-scheme: light` for a reader who has expressed no
+ * preference here, and once under [data-theme="light"] for one who pressed the
+ * toggle. Only the mapping repeats; no colour value is written twice.
+ *
+ * The five PROVENANCE colours of the console and the plots - red is simulator
+ * truth, blue the robot's estimate, green a plan, orange an operator command,
+ * magenta a fault - carry meaning in this project, so none of them is used
+ * here as decoration. The site's accent is a violet that appears nowhere in
+ * the instrument, which is the point: chrome must not look like data.
  *
  * No @font-face and no @import: a visitor downloads HTML, CSS, three PNGs and
  * nothing else. The console bundles its own IBM Plex; these pages deliberately
@@ -14,190 +21,464 @@
  */
 
 :root {
-  /* surfaces */
-  --bg: #181818;
-  --panel: #1c1c1c;
-  --inset: #1e1e1e;
-  --sunken: #1a1a1a;
-  --row: #262626;
-  --row-alt: #2a2a2a;
-  --header: #2c2c2c;
+  /* ---- dark palette (the console's neutrals, very slightly cooler) ---- */
+  --d-bg: #0f1115;
+  --d-bg-soft: #14161b;
+  --d-surface: #171a20;
+  --d-surface-2: #1c2027;
+  --d-sunken: #0c0e12;
+  --d-line: #242932;
+  --d-line-strong: #333a46;
+  --d-text: #e8eaee;
+  --d-text-muted: #a9b1bd;
+  --d-text-faint: #767e8b;
+  --d-accent: #9b8cff;
+  --d-accent-strong: #b3a6ff;
+  --d-accent-weak: rgba(155, 140, 255, 0.14);
+  --d-accent-ink: #0f1115;
+  --d-warn: #e8c07a;
+  --d-warn-weak: rgba(232, 192, 122, 0.12);
+  --d-good: #86c99a;
+  --d-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 32px -16px rgba(0, 0, 0, 0.8);
+  --d-glow: radial-gradient(60rem 28rem at 15% -10%, rgba(155, 140, 255, 0.13), transparent 60%);
 
-  /* borders */
-  --line: #333;
-  --line-mid: #444;
-  --border: #555;
+  /* ---- light palette (warm paper, ink that is not pure black) -------- */
+  --l-bg: #fbfbfa;
+  --l-bg-soft: #f5f5f3;
+  --l-surface: #ffffff;
+  --l-surface-2: #f3f4f6;
+  --l-sunken: #f0f1f2;
+  --l-line: #e3e4e7;
+  --l-line-strong: #c9ccd3;
+  --l-text: #1b1d22;
+  --l-text-muted: #545a66;
+  --l-text-faint: #7d848f;
+  --l-accent: #5b4bd6;
+  --l-accent-strong: #4336b0;
+  --l-accent-weak: rgba(91, 75, 214, 0.10);
+  --l-accent-ink: #ffffff;
+  --l-warn: #8a6410;
+  --l-warn-weak: rgba(138, 100, 16, 0.10);
+  --l-good: #2f7d4f;
+  --l-shadow: 0 1px 2px rgba(16, 18, 24, 0.06), 0 12px 32px -18px rgba(16, 18, 24, 0.3);
+  --l-glow: radial-gradient(60rem 28rem at 15% -10%, rgba(91, 75, 214, 0.08), transparent 60%);
 
-  /* text */
-  --text: #e6e6e6;
-  --text-2: #cfcfcf;
-  --text-3: #bdbdbd;
-  --text-5: #8a8a8a;
-
-  /* accents */
-  --link: #8fd0ff;
-  --warn: #f0d08a;
-  --warn-border: #6a5a30;
-  --good: #9ad09a;
 
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
     Arial, "Noto Sans", sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 
-  --measure: 75ch;
-  --pad: 1.5rem;
+  --measure: 72ch;
+  --gutter: clamp(1rem, 4vw, 2.5rem);
+  --radius: 12px;
+  --radius-sm: 8px;
 }
+
+/* ---- mapping: dark is the default, both overrides change tokens only ---- */
+
+:root {
+  color-scheme: dark;
+  --bg: var(--d-bg);
+  --bg-soft: var(--d-bg-soft);
+  --surface: var(--d-surface);
+  --surface-2: var(--d-surface-2);
+  --sunken: var(--d-sunken);
+  --line: var(--d-line);
+  --line-strong: var(--d-line-strong);
+  --text: var(--d-text);
+  --text-muted: var(--d-text-muted);
+  --text-faint: var(--d-text-faint);
+  --accent: var(--d-accent);
+  --accent-strong: var(--d-accent-strong);
+  --accent-weak: var(--d-accent-weak);
+  --accent-ink: var(--d-accent-ink);
+  --warn: var(--d-warn);
+  --warn-weak: var(--d-warn-weak);
+  --good: var(--d-good);
+  --shadow: var(--d-shadow);
+  --glow: var(--d-glow);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: var(--l-bg);
+    --bg-soft: var(--l-bg-soft);
+    --surface: var(--l-surface);
+    --surface-2: var(--l-surface-2);
+    --sunken: var(--l-sunken);
+    --line: var(--l-line);
+    --line-strong: var(--l-line-strong);
+    --text: var(--l-text);
+    --text-muted: var(--l-text-muted);
+    --text-faint: var(--l-text-faint);
+    --accent: var(--l-accent);
+    --accent-strong: var(--l-accent-strong);
+    --accent-weak: var(--l-accent-weak);
+    --accent-ink: var(--l-accent-ink);
+    --warn: var(--l-warn);
+    --warn-weak: var(--l-warn-weak);
+    --good: var(--l-good);
+    --shadow: var(--l-shadow);
+    --glow: var(--l-glow);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: var(--l-bg);
+  --bg-soft: var(--l-bg-soft);
+  --surface: var(--l-surface);
+  --surface-2: var(--l-surface-2);
+  --sunken: var(--l-sunken);
+  --line: var(--l-line);
+  --line-strong: var(--l-line-strong);
+  --text: var(--l-text);
+  --text-muted: var(--l-text-muted);
+  --text-faint: var(--l-text-faint);
+  --accent: var(--l-accent);
+  --accent-strong: var(--l-accent-strong);
+  --accent-weak: var(--l-accent-weak);
+  --accent-ink: var(--l-accent-ink);
+  --warn: var(--l-warn);
+  --warn-weak: var(--l-warn-weak);
+  --good: var(--l-good);
+  --shadow: var(--l-shadow);
+  --glow: var(--l-glow);
+}
+
+/* Which copy of a pre-rendered mermaid diagram is shown. Both are in the HTML
+ * (site/build.mjs renders each diagram in both palettes), because the
+ * alternative - rewriting mermaid's emitted <style> to use CSS variables - is
+ * brittle, and re-rendering in the browser would reintroduce the 3.5 MB
+ * bundle this build exists to avoid. */
+.diagram-light { display: none; }
+.diagram-dark { display: block; }
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .diagram-light { display: block; }
+  :root:not([data-theme="dark"]) .diagram-dark { display: none; }
+}
+
+:root[data-theme="light"] .diagram-light { display: block; }
+:root[data-theme="light"] .diagram-dark { display: none; }
+
+/* ------------------------------------------------------------------ base */
 
 * { box-sizing: border-box; }
 
 html {
   background: var(--bg);
-  /* 16px prose, against the console's 12.5px instrument density: this is
-   * reading material, not a panel full of numbers. */
   font-size: 100%;
   -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    var(--glow),
+    var(--bg);
+  background-repeat: no-repeat;
   color: var(--text);
   font-family: var(--sans);
-  font-size: 1rem;
-  line-height: 1.6;
+  /* 17px prose against the console's 12.5px instrument density: this is
+   * reading material, not a panel full of numbers. */
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--accent-weak); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 /* ---------------------------------------------------------------- header */
 
 .topbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 1.25rem;
-  padding: 0.7rem var(--pad);
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.65rem var(--gutter);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
 }
 
-.topbar .brand {
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--text);
-  text-decoration: none;
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
   margin-right: auto;
+  color: var(--text);
+  font-weight: 650;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
 }
+
+.brand:hover { color: var(--text); }
+.brand .mark { display: block; flex: 0 0 auto; color: var(--accent); }
 
 .topbar nav {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1.1rem;
-  font-size: 0.9rem;
+  align-items: center;
+  gap: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+
+.topbar nav::-webkit-scrollbar { display: none; }
 
 .topbar nav a {
-  color: var(--text-3);
+  padding: 0.35rem 0.7rem;
+  border-radius: 99px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
   text-decoration: none;
-  padding-bottom: 2px;
-  border-bottom: 1px solid transparent;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.topbar nav a:hover { color: var(--text); border-bottom-color: var(--border); }
-.topbar nav a[aria-current="page"] { color: var(--link); border-bottom-color: var(--link); }
+.topbar nav a:hover { background: var(--surface-2); color: var(--text); }
+
+.topbar nav a[aria-current="page"] {
+  background: var(--accent-weak);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* The theme switch. `aria-pressed` is not used: this is a three-state control
+ * in spirit (system / light / dark) collapsed to a toggle whose label always
+ * names what pressing it will do. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.theme-toggle:hover { color: var(--text); border-color: var(--accent); }
+.theme-toggle svg { display: block; }
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle .icon-moon { display: block; }
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .theme-toggle .icon-sun { display: block; }
+  :root:not([data-theme="dark"]) .theme-toggle .icon-moon { display: none; }
+}
+
+:root[data-theme="light"] .theme-toggle .icon-sun { display: block; }
+:root[data-theme="light"] .theme-toggle .icon-moon { display: none; }
 
 /* ------------------------------------------------------------------ main */
 
+/* A three-column grid: prose sits in the middle track, and anything marked
+ * .full-bleed (a wide diagram) spans the whole width without the old
+ * margin-left: 50% / translateX trick. */
 main {
-  max-width: var(--measure);
-  margin: 0 auto;
-  padding: 2.5rem var(--pad) 3rem;
+  display: grid;
+  grid-template-columns:
+    [full-start] minmax(var(--gutter), 1fr)
+    [content-start] min(var(--measure), 100% - 2 * var(--gutter)) [content-end]
+    minmax(var(--gutter), 1fr) [full-end];
+  padding: 3rem 0 4rem;
 }
+
+main > * { grid-column: content; }
+main > .full-bleed { grid-column: full; }
+
+/* ------------------------------------------------------------ typography */
 
 h1, h2, h3, h4 {
-  line-height: 1.25;
-  font-weight: 600;
-  margin: 2.2em 0 0.6em;
-  scroll-margin-top: 4rem; /* the sticky header must not eat an anchor target */
+  margin: 2.4em 0 0.6em;
+  line-height: 1.22;
+  letter-spacing: -0.02em;
+  font-weight: 650;
+  scroll-margin-top: 5rem;
 }
 
-h1 { font-size: 1.9rem; margin-top: 0; letter-spacing: -0.01em; }
-h2 { font-size: 1.35rem; border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
-h3 { font-size: 1.1rem; }
-h4 { font-size: 1rem; color: var(--text-2); }
+h1 { font-size: clamp(1.9rem, 1.5rem + 1.6vw, 2.4rem); margin-top: 0; }
+h2 { font-size: clamp(1.35rem, 1.2rem + 0.8vw, 1.7rem); }
+h3 { font-size: 1.15rem; }
+h4 { font-size: 1rem; color: var(--text-muted); letter-spacing: 0; }
 
-p, ul, ol { margin: 0 0 1.1em; }
-li { margin-bottom: 0.35em; }
-li > ul, li > ol { margin-top: 0.35em; }
+h2 + h3, h3 + h4 { margin-top: 1.4em; }
 
-a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
-a:hover { color: #b8e2ff; }
+p, ul, ol { margin: 0 0 1.15em; }
+li { margin-bottom: 0.4em; }
+li > ul, li > ol { margin-top: 0.4em; }
 
-strong { color: #f2f2f2; font-weight: 600; }
-em { color: var(--text-2); }
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
 
-hr { border: 0; border-top: 1px solid var(--line); margin: 2.5rem 0; }
+a:hover { color: var(--accent-strong); text-decoration-color: currentColor; }
+
+strong { font-weight: 650; color: var(--text); }
+em { color: var(--text-muted); }
+
+hr {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line), transparent);
+  margin: 3rem 0;
+}
 
 blockquote {
-  margin: 0 0 1.1em;
-  padding: 0.1rem 1rem;
-  border-left: 3px solid var(--line-mid);
-  color: var(--text-3);
+  margin: 1.5em 0;
+  padding: 0.1em 0 0.1em 1.2em;
+  border-left: 3px solid var(--accent);
+  color: var(--text-muted);
 }
 
 /* -------------------------------------------------------------- the hero */
 
+/* The band behind the hero runs the full viewport width while the text stays
+ * in the measure, so the top of the page reads as a masthead rather than as
+ * the first paragraph of a document. Drawn in a ::before rather than by
+ * moving the section into the grid's `full` track, because the copy must stay
+ * in the content column and a wrapper element would have to come from the
+ * markdown pipeline. */
 .hero {
-  margin-bottom: 2.75rem;
-  padding-bottom: 2rem;
-  border-bottom: 1px solid var(--line);
+  position: relative;
+  isolation: isolate;
+  padding: 2.5rem 0 3rem;
+  margin-bottom: 3rem;
 }
 
-.hero h1 { font-size: clamp(1.9rem, 1.4rem + 2.2vw, 2.6rem); margin-bottom: 0.4em; }
+.hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -3rem calc(50% - 50vw) 0;
+  border-bottom: 1px solid var(--line);
+  background:
+    radial-gradient(42rem 22rem at 18% 0%, var(--accent-weak), transparent 70%),
+    linear-gradient(180deg, var(--bg-soft), transparent 85%);
+}
+
+.hero h1 {
+  font-size: clamp(2.2rem, 1.5rem + 3.2vw, 3.4rem);
+  margin-bottom: 0.35em;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
 
 .hero .tagline {
-  font-size: 1.12rem;
-  line-height: 1.5;
-  color: var(--text-2);
-  max-width: 62ch;
+  max-width: 54ch;
+  margin: 0 0 1.6rem;
+  color: var(--text-muted);
+  font-size: clamp(1.05rem, 1rem + 0.5vw, 1.3rem);
+  line-height: 1.45;
 }
+
+.hero .tagline strong { color: var(--text); font-weight: 650; }
 
 .cta {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
-  margin: 1.6rem 0 1.2rem;
+  margin: 0 0 2rem;
 }
 
 .btn {
-  display: inline-block;
-  padding: 0.55rem 1.05rem;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--row);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.6rem 1.05rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: var(--surface);
   color: var(--text);
   font-size: 0.95rem;
+  font-weight: 550;
   text-decoration: none;
-  white-space: nowrap;
+  transition: transform 0.15s ease, border-color 0.15s ease,
+    background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.btn:hover { background: var(--row-alt); border-color: #6a6a6a; color: var(--text); }
+.btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
 
 .btn-primary {
-  border-color: var(--link);
-  color: var(--link);
-  background: #1f2a33;
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
-.btn-primary:hover { background: #26343f; color: #b8e2ff; }
+.btn-primary:hover { background: var(--accent-strong); color: var(--accent-ink); }
+
+/* The measured headline figures. Mono, because every one of them is a
+ * measurement that appears verbatim further down the page. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: 1px;
+  margin: 0 0 2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--line);
+  overflow: hidden;
+}
+
+.stats div {
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+}
+
+.stats dt {
+  margin: 0 0 0.15rem;
+  color: var(--text-faint);
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.stats dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
 
 .hero-note {
+  max-width: 62ch;
+  margin: 0;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--line-strong);
+  color: var(--text-faint);
   font-size: 0.9rem;
-  color: var(--text-5);
-  max-width: 68ch;
-  margin-bottom: 0;
+  line-height: 1.55;
 }
 
 /* ------------------------------------------------------- code and tables */
@@ -205,170 +486,227 @@ blockquote {
 code, pre, kbd, samp { font-family: var(--mono); }
 
 code {
-  font-size: 0.875em;
-  background: var(--sunken);
+  padding: 0.12em 0.4em;
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 0.08em 0.32em;
-  color: var(--text-2);
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-size: 0.86em;
   overflow-wrap: break-word;
 }
 
 pre {
-  margin: 0 0 1.3em;
-  padding: 0.85rem 1rem;
-  background: var(--sunken);
+  margin: 1.5em 0;
+  padding: 1rem 1.1rem;
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: var(--radius);
+  background: var(--sunken);
+  box-shadow: var(--shadow);
   overflow-x: auto;
-  line-height: 1.45;
+  line-height: 1.55;
 }
 
 pre code {
-  background: none;
-  border: 0;
   padding: 0;
-  font-size: 0.85rem;
-  color: var(--text-2);
-  white-space: pre;
+  border: 0;
+  background: none;
+  font-size: 0.87rem;
 }
 
 .table-wrap {
-  overflow-x: auto;
-  margin: 0 0 1.4em;
+  margin: 1.6em 0;
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow-x: auto;
 }
 
 table {
-  border-collapse: collapse;
   width: 100%;
+  border-collapse: collapse;
   font-size: 0.9rem;
-  background: var(--panel);
+  line-height: 1.5;
 }
 
 th, td {
-  padding: 0.5rem 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
-  border-bottom: 1px solid var(--line);
 }
 
 thead th {
-  background: var(--header);
-  color: var(--text);
-  font-weight: 600;
-  white-space: nowrap;
   position: sticky;
   top: 0;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-tbody tr:nth-child(even) { background: var(--inset); }
+tbody tr:nth-child(even) { background: var(--bg-soft); }
+tbody tr:hover { background: var(--accent-weak); }
 tbody tr:last-child td { border-bottom: 0; }
-td code, th code { background: var(--bg); }
+td code, th code { background: var(--sunken); }
 
 /* ------------------------------------------------- figures and diagrams */
 
-.shot {
-  margin: 1.8em 0;
-  padding: 0;
+figure { margin: 2em 0; }
+
+/* A plot is 1600 px of four panels and a screenshot is a whole console: both
+ * are unreadable squeezed into a 72ch prose measure. They span the full grid
+ * and are then capped and centred, so they are wider than the text without
+ * running edge to edge on a large display. */
+/* Tables take the same track: the evidence documents are mostly wide tables
+ * whose "Measured" column is a sentence of numbers, and a 72ch measure turns
+ * every row into five lines or hides it behind a horizontal scrollbar. */
+main > .table-wrap,
+main > .shot {
+  grid-column: full;
+  justify-self: center;
+  width: min(68rem, 100% - 2 * var(--gutter));
 }
 
 .shot img {
   display: block;
   width: 100%;
   height: auto;
-  border: 1px solid var(--line-mid);
-  border-radius: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   background: var(--sunken);
+  box-shadow: var(--shadow);
 }
 
 .shot figcaption,
 .diagram figcaption {
-  margin-top: 0.55rem;
+  margin-top: 0.7rem;
+  color: var(--text-faint);
   font-size: 0.85rem;
   line-height: 1.5;
-  color: var(--text-5);
+  text-align: center;
 }
 
-/* Mermaid is pre-rendered to SVG at build time, at the natural width its own
- * layout produced. The system map is far wider than this page's 75ch measure,
- * so the figure breaks out of the column to the window width and scrolls
- * horizontally past that — a legible diagram you drag beats an illegible one
- * that fits. `margin-left: 50%` + `translateX(-50%)` centres it on the
- * viewport, because <main> is itself centred. */
+/* A pre-rendered diagram keeps the natural width its own layout produced: the
+ * system map is far wider than the text measure, so the figure spans the full
+ * grid and scrolls horizontally past that. A legible diagram you drag beats an
+ * illegible one that fits. */
 .diagram {
-  width: min(96vw, 1500px);
-  margin: 1.8em 0 1.8em 50%;
-  transform: translateX(-50%);
-  padding: 1rem;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 3px;
+  margin: 2.5em 0;
+  padding: 1.25rem var(--gutter);
+  border-block: 1px solid var(--line);
+  background: var(--bg-soft);
   overflow-x: auto;
 }
 
 .diagram svg {
   display: block;
-  margin: 0 auto;
   height: auto;
-  max-width: none; /* mermaid's own inline max-width is cleared in build.mjs */
+  max-width: none;
+  margin: 0 auto;
 }
 
-.diagram-fallback { border-color: var(--warn-border); }
-.diagram-fallback figcaption { margin: 0 0 0.6rem; color: var(--warn); }
+.diagram-fallback {
+  padding: 1rem var(--gutter);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--warn-weak);
+}
+
+.diagram-fallback figcaption { margin: 0 0 0.6rem; color: var(--warn); text-align: left; }
 .diagram-fallback pre { margin-bottom: 0; }
 
 /* ------------------------------------------------------- evidence index */
 
-.doc-list { list-style: none; padding: 0; }
-
-.doc-list li {
-  margin: 0 0 1.4rem;
-  padding: 1rem 1.1rem;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 3px;
+.doc-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 2rem 0;
 }
 
-.doc-title { font-size: 1.05rem; font-weight: 600; }
-.doc-summary { margin: 0.45rem 0 0.4rem; color: var(--text-3); font-size: 0.95rem; }
-.doc-path { margin: 0; font-size: 0.8rem; color: var(--text-5); }
+.doc-list li {
+  display: flex;
+  flex-direction: column;
+  padding: 1.1rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.doc-list li:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+.doc-title {
+  font-size: 1.02rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.doc-title::after {
+  content: " →";
+  color: var(--text-faint);
+}
+
+.doc-summary {
+  flex: 1;
+  margin: 0.5rem 0 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.doc-path { margin: 0; font-size: 0.78rem; color: var(--text-faint); }
+.doc-path code { border: 0; background: none; padding: 0; }
 
 /* ---------------------------------------------------------------- footer */
 
 footer {
+  padding: 2.5rem var(--gutter) 3.5rem;
   border-top: 1px solid var(--line);
-  background: var(--panel);
-  padding: 1.6rem var(--pad);
+  background: var(--bg-soft);
+  color: var(--text-faint);
+  font-size: 0.88rem;
 }
 
-footer p {
+footer > * {
   max-width: var(--measure);
-  margin: 0 auto 0.8rem;
-  font-size: 0.875rem;
-  line-height: 1.55;
-  color: var(--text-5);
+  margin-left: auto;
+  margin-right: auto;
 }
 
-footer strong { color: var(--text-3); }
-footer .meta { margin-bottom: 0; font-family: var(--mono); font-size: 0.8rem; }
+footer p { margin: 0 0 0.9rem; line-height: 1.55; }
+footer strong { color: var(--text-muted); }
+footer .meta { margin-bottom: 0; font-family: var(--mono); font-size: 0.78rem; }
 
 /* ------------------------------------------------------------ responsive */
 
+@media (max-width: 46rem) {
+  .topbar { gap: 0.75rem; }
+  .brand span { display: none; }
+  .brand .mark { margin-right: 0.25rem; }
+}
+
 @media (max-width: 34rem) {
-  :root { --pad: 1rem; }
-  body { line-height: 1.55; }
-  h1 { font-size: 1.55rem; }
-  h2 { font-size: 1.2rem; }
-  .topbar { position: static; }
-  .topbar nav { font-size: 0.85rem; column-gap: 0.9rem; }
-  .btn { width: 100%; text-align: center; }
-  table { font-size: 0.82rem; }
-  th, td { padding: 0.4rem 0.5rem; }
-  /* No room to break out of anything: the figure is the column, and the
-   * diagram inside it scrolls. */
-  .diagram { width: 100%; margin-left: 0; transform: none; padding: 0.6rem; }
+  body { font-size: 1rem; }
+  main { padding-top: 2rem; }
+  .hero { padding-bottom: 1.75rem; }
+  .cta .btn { flex: 1 1 auto; justify-content: center; }
+  th, td { padding: 0.5rem 0.6rem; }
+  .diagram { padding-inline: 1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

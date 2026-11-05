@@ -234,7 +234,8 @@ a scrubbed view is the same fold as a played one).
 
 `scripts/build_site.sh` renders this README and `docs/*.md` into a static site
 with that console under `console/`, pre-rendering the mermaid diagrams at build
-time so a visitor downloads no JavaScript outside the console itself. Deploy
+time in both themes, so the only JavaScript a visitor loads outside the console
+is the ~25 inline lines that remember a light/dark choice. Deploy
 `site/dist/` to any static host at any base path; see
 [`site/README.md`](site/README.md).
 
