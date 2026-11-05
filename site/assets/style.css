@@ -152,17 +152,23 @@
  * (site/build.mjs renders each diagram in both palettes), because the
  * alternative - rewriting mermaid's emitted <style> to use CSS variables - is
  * brittle, and re-rendering in the browser would reintroduce the 3.5 MB
- * bundle this build exists to avoid. */
-.diagram-light { display: none; }
-.diagram-dark { display: block; }
+ * bundle this build exists to avoid.
+ *
+ * Every selector below names the figure as well as the svg, so it outranks
+ * the `.diagram svg { display: block }` layout rule further down. MEASURED on
+ * the built pages twice: with a bare `.diagram-light` (0-1-0) and then with
+ * `svg.diagram-light` (0-1-1, a TIE with `.diagram svg`, so the later rule in
+ * the file still won) the dark theme showed BOTH copies of every diagram. */
+.diagram svg.diagram-light { display: none; }
+.diagram svg.diagram-dark { display: block; }
 
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .diagram-light { display: block; }
-  :root:not([data-theme="dark"]) .diagram-dark { display: none; }
+  :root:not([data-theme="dark"]) .diagram svg.diagram-light { display: block; }
+  :root:not([data-theme="dark"]) .diagram svg.diagram-dark { display: none; }
 }
 
-:root[data-theme="light"] .diagram-light { display: block; }
-:root[data-theme="light"] .diagram-dark { display: none; }
+:root[data-theme="light"] .diagram svg.diagram-light { display: block; }
+:root[data-theme="light"] .diagram svg.diagram-dark { display: none; }
 
 /* ------------------------------------------------------------------ base */
 
