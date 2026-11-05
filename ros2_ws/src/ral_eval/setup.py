@@ -49,6 +49,7 @@ setup(
             'run_scenario = ral_eval.run_scenario:main',
             'compute_metrics = ral_eval.metrics:main',
             'plot_run = ral_eval.plot_run:main',
+            'replay_export = ral_eval.replay_export:main',
             'dashboard_api = ral_eval.dashboard_api:main',
             'wait_for_frame_alignment = ral_eval.wait_for_alignment:main',
             'wait_for_tf = ral_eval.wait_for_tf:main',
