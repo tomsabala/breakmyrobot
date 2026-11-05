@@ -13,10 +13,19 @@ const linkTab = {
  * `stalled` is a measurement about /clock, not about the link: the browser
  * says "last received" when ITS connection is down, and only claims the
  * simulation stopped when the connection is up and no /clock arrived for
- * 2 s wall. Conflating the two would blame gz for a dropped socket.
+ * 2 s wall. Conflating the two would blame gz for a dropped socket - or, in
+ * replay, for a paused playhead, which is why a recording reports its own
+ * transport state instead of pretending to measure a simulator that is not
+ * running.
  */
 function clockWord(ctx: ConsoleCtx): [string, string, string] {
   const { state } = ctx;
+  const recording = ctx.source.kind === 'replay' ? ctx.source.replay : undefined;
+  if (recording) {
+    if (recording.closed()) return ['■', 'recording ended', C.text2];
+    if (!recording.playing()) return ['❙❙', 'recording paused', C.warn];
+    return ['▶', `recorded /clock at ${recording.speed()}×`, C.text2];
+  }
   if (!state.linkUp) return ['–', 'last received', C.warn];
   if (state.stack?.state === 'starting') return ['–', 'bring-up', C.warn];
   const since = Date.now() - state.lastClockWallMs;
@@ -31,8 +40,35 @@ export function TopBar({ ctx }: { ctx: ConsoleCtx }) {
   const stack = state.stack;
   const mission = state.mission;
   const robotLabel = `${profile.model} · ${profile.robot}`;
+  // Non-null only in replay mode: the identity of the RECORDING on screen.
+  const rec = source.kind === 'replay' ? (source.replay?.info() ?? null) : null;
 
   const provRows: [string, string][] = [
+    ...(rec ? ([
+      ['replay run_id', rec.run_id],
+      ['replay outcome', `${rec.outcome} · ${rec.headline}`],
+      ['replay span', `sim ${rec.t_start.toFixed(2)} – ${rec.t_end.toFixed(2)} s · `
+        + `${rec.frames} recorded frames`],
+      ['replay bag', rec.provenance.bag ?? 'not recorded in the fixture'],
+      ['replay git_sha', `${rec.provenance.git_sha ?? 'not recorded in the fixture'}`
+        + `${rec.provenance.git_dirty ? ' · git_dirty: the tree had uncommitted changes'
+          + ' when this run was recorded' : ''}`],
+      ['replay image_ref', rec.provenance.image_ref ?? 'not recorded in the fixture'],
+      ['replay exported', rec.provenance.exported_utc ?? 'not recorded in the fixture'],
+      ['replay decimation', Object.entries(rec.provenance.decimation ?? {})
+        .map(([topic, rule]) => `${topic}: ${rule}`).join(' · ') || 'none recorded'],
+      ['replay topics', Object.entries(rec.provenance.topic_status ?? {})
+        .filter(([, status]) => status !== 'read')
+        .map(([topic, status]) => `${topic}: ${status}`).join(' · ')
+        || 'every exported topic was read from the bag'],
+      ['replay grid', rec.provenance.grid_source ?? 'from the bag'],
+      ['replay reference', rec.reference_fallback
+        ? 'FALLBACK: the fixture carried no /api/reference, so the committed design '
+          + 'fixture is shown and may not match this run'
+        : 'from the fixture, as /api/reference answered during the run'],
+      ['replay control', 'none: this is a recording, no container, no gz, no autonomy '
+        + 'stack. scripts/dashboard.sh runs the live console.'],
+    ] as [string, string][]) : []),
     ['run / experiment', mission ? mission.experiment_id : 'no mission state yet'],
     ['world', reference.world],
     ['map_sha256', reference.map.map_sha256],
@@ -131,17 +167,27 @@ export function TopBar({ ctx }: { ctx: ConsoleCtx }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-        <span style={{ font: `11px ${F.sans}`, color: C.text4 }}>dashboard link</span>
+        <span style={{ font: `11px ${F.sans}`, color: C.text4 }}>
+          {rec ? 'frame source' : 'dashboard link'}
+        </span>
         <span style={{
           font: `500 11.5px ${F.mono}`, color: state.linkUp ? C.text2 : C.warn,
         }}
         >
-          {state.linkUp
-            ? '● connected'
-            : `○ disconnected ${state.linkDownWallMs
-              ? f2((Date.now() - state.linkDownWallMs) / 1000) : '0.00'} s wall`}
+          {rec
+            ? '◼ static file'
+            : (state.linkUp
+              ? '● connected'
+              : `○ disconnected ${state.linkDownWallMs
+                ? f2((Date.now() - state.linkDownWallMs) / 1000) : '0.00'} s wall`)}
         </span>
-        <Tip text="JSON over SSE between this browser and ral_eval's dashboard gateway. It is not a robotics protocol and carries no ROS messages." />
+        <Tip
+          text={rec
+            ? 'There is no connection. The frames come from a committed JSON export of '
+              + `${rec.provenance.bag ?? 'the run\'s bag'}; no socket, no gateway, no `
+              + 'ROS graph is involved.'
+            : "JSON over SSE between this browser and ral_eval's dashboard gateway. It is not a robotics protocol and carries no ROS messages."}
+        />
       </div>
 
       <button
@@ -153,22 +199,30 @@ export function TopBar({ ctx }: { ctx: ConsoleCtx }) {
           padding: 0, cursor: 'pointer', textAlign: 'left',
         }}
       >
-        <span style={{ font: `11px ${F.sans}`, color: C.text4 }}>run</span>
+        <span style={{ font: `11px ${F.sans}`, color: C.text4 }}>{rec ? 'replay' : 'run'}</span>
         <span style={{
           font: `500 11.5px ${F.mono}`, overflow: 'hidden', textOverflow: 'ellipsis',
           minWidth: 0, textDecoration: `underline dotted ${C.borderMax}`,
         }}
         >
-          {mission ? mission.experiment_id : '—'}
+          {rec ? rec.run_id : (mission ? mission.experiment_id : '—')}
         </span>
       </button>
 
-      <span style={{
-        font: `500 10.5px ${F.mono}`, letterSpacing: '.04em',
-        border: `1px solid ${C.borderAlt}`, padding: '3px 7px',
-      }}
+      <span
+        title={rec
+          ? `REPLAY of ${rec.run_id} (${rec.robot} in ${rec.world}) · outcome `
+            + `${rec.outcome} · git_sha ${rec.provenance.git_sha ?? 'unrecorded'} · `
+            + `image_ref ${rec.provenance.image_ref ?? 'unrecorded'} · exported `
+            + `${rec.provenance.exported_utc ?? 'unrecorded'} · nothing here is live`
+          : undefined}
+        style={{
+          font: `500 10.5px ${F.mono}`, letterSpacing: '.04em',
+          border: `1px solid ${rec ? C.warn : C.borderAlt}`, padding: '3px 7px',
+          color: rec ? C.warn : undefined,
+        }}
       >
-        {source.kind === 'mock' ? 'MOCK' : 'LIVE'}
+        {source.kind === 'replay' ? 'REPLAY' : (source.kind === 'mock' ? 'MOCK' : 'LIVE')}
       </span>
       <button type="button" onClick={() => ctx.setPop(ctx.pop === 'legend' ? null : 'legend')}
         style={{

@@ -141,7 +141,7 @@ export function Inspector({ ral, screen, go }: {
           border: `1px solid ${C.borderAlt}`, padding: '3px 7px',
         }}
         >
-          {source.kind === 'mock' ? 'MOCK' : 'LIVE'}
+          {source.kind === 'replay' ? 'REPLAY' : (source.kind === 'mock' ? 'MOCK' : 'LIVE')}
         </span>
       </div>
 

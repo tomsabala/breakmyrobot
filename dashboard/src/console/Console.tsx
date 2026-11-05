@@ -69,7 +69,11 @@ export function Console({ ral, go }: { ral: Ral; go: (screen: Screen) => void })
   }, []);
 
   const stackRobot = uiState.stack?.robot ?? null;
-  const robot = stackRobot ?? startRobot;
+  // A recording has no /stack message, but it does know which platform it
+  // recorded: showing a car run under the roomba's profile would put the
+  // wrong footprint, plant limits and estimator label on real data.
+  const recordedRobot = source.kind === 'replay' ? (source.replay?.robot() ?? null) : null;
+  const robot = stackRobot ?? recordedRobot ?? startRobot;
   const profile: RobotProfile | undefined = reference.profiles[robot];
 
   const goalDefault = useMemo<GoalForm>(() => {

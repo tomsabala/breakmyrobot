@@ -366,14 +366,22 @@ export function Timeline({ ctx }: { ctx: ConsoleCtx }) {
 }
 
 /**
- * The replay bar: MOCK ONLY.
+ * The transport bar: SEEKABLE SOURCES ONLY (the mock and a replay fixture).
  *
- * A live stack has no replay. Showing Play/Pause/step against one would imply
- * the operator can rewind a running simulation, which is a control the system
- * does not have.
+ * A live stack has no transport. Showing Play/Pause/scrub against one would
+ * imply the operator can rewind a running simulation, which is a control the
+ * system does not have.
+ *
+ * The scrub bar appears only when the source reports a finite sim-time
+ * window: the mock generates indefinitely, so there is no end to scrub to and
+ * drawing one would invent a run length.
  */
 function ReplayBar({ ctx }: { ctx: ConsoleCtx }) {
   const replay = ctx.source.replay!;
+  const options = replay.scenarios();
+  const span = replay.span();
+  const scrubbable = span.end > span.start;
+  const accept = replay.acceptTime();
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6, border: `1px dashed ${C.border}`,
@@ -384,24 +392,28 @@ function ReplayBar({ ctx }: { ctx: ConsoleCtx }) {
         font: `600 10px ${F.mono}`, letterSpacing: '.06em', color: C.text2,
       }}
       >
-        REPLAY
+        {ctx.source.kind === 'replay' ? 'RECORDING' : 'REPLAY'}
       </span>
-      <select
-        value={replay.scenario()}
-        onChange={(event) => replay.pick(event.target.value)}
-        style={{
-          background: C.ink, color: C.text, border: `1px solid ${C.lineMid}`,
-          fontSize: 10.5, padding: '2px 4px',
-        }}
-      >
-        {replay.scenarios().map((option) => (
-          <option key={option.value} value={option.value} disabled={option.disabled}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      {options.length > 1 ? (
+        <select
+          value={replay.scenario()}
+          onChange={(event) => replay.pick(event.target.value)}
+          style={{
+            background: C.ink, color: C.text, border: `1px solid ${C.lineMid}`,
+            fontSize: 10.5, padding: '2px 4px', maxWidth: 260,
+          }}
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value} disabled={option.disabled}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <button type="button" onClick={replay.restart} style={smallButton}>Restart</button>
-      <button type="button" onClick={replay.seekAccept} style={smallButton}>→ accept</button>
+      {accept !== null ? (
+        <button type="button" onClick={replay.seekAccept} style={smallButton}>→ accept</button>
+      ) : null}
       <button
         type="button"
         onClick={replay.togglePlay}
@@ -414,8 +426,25 @@ function ReplayBar({ ctx }: { ctx: ConsoleCtx }) {
         {replay.closed() ? 'Ended' : (replay.playing() ? 'Pause' : 'Play')}
       </button>
       <button type="button" onClick={() => replay.step(0.1)} style={smallButton}>+0.1 s</button>
+      {scrubbable ? (
+        <>
+          <input
+            type="range"
+            min={span.start}
+            max={span.end}
+            step={0.05}
+            value={replay.now()}
+            onChange={(event) => replay.seek(Number(event.target.value))}
+            style={{ width: 150, accentColor: C.text }}
+            aria-label="replay position, sim seconds"
+          />
+          <span style={{ font: `500 10px ${F.mono}`, color: C.text3, minWidth: 92 }}>
+            {`${replay.now().toFixed(1)} / ${span.end.toFixed(1)} s`}
+          </span>
+        </>
+      ) : null}
       <div style={{ display: 'flex', border: `1px solid ${C.lineMid}` }}>
-        {[1, 4, 16].map((speed) => (
+        {replay.speeds().map((speed) => (
           <button
             key={speed}
             type="button"

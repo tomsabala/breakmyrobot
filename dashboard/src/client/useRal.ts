@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createLiveSource } from './liveSource';
 import { createMockSource } from './mockSource';
-import { chooseSourceKind } from './source';
+import { createReplaySource } from './replaySource';
+import { chooseSourceKind, RESET_TOPIC } from './source';
 import type { RalSource } from './source';
 import { createState, ingest } from './store';
 import type { UiState } from './store';
@@ -20,10 +21,12 @@ export interface Ral {
 const UI_REFRESH_MS = 120;
 
 export function useRal(): Ral {
-  const source = useMemo<RalSource>(
-    () => (chooseSourceKind() === 'mock' ? createMockSource() : createLiveSource()),
-    [],
-  );
+  const source = useMemo<RalSource>(() => {
+    const kind = chooseSourceKind();
+    if (kind === 'mock') return createMockSource();
+    if (kind === 'replay') return createReplaySource();
+    return createLiveSource();
+  }, []);
   const [reference, setReference] = useState<Reference | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
@@ -43,6 +46,14 @@ export function useRal(): Ral {
     if (!reference) return undefined;
     stateRef.current = createState(reference.world_to_map);
     const unsubscribe = source.subscribe((topic, payload) => {
+      if (topic === RESET_TOPIC) {
+        // A seekable source rewound. The UiState is a fold that only grows,
+        // so the only correct rewind is to drop it and let the source re-emit
+        // the prefix it wants folded; keeping it would leave the previous
+        // playhead's trail, missions and fault events on screen.
+        stateRef.current = createState(reference.world_to_map);
+        return;
+      }
       const state = stateRef.current;
       if (state) ingest(state, topic, payload);
     });

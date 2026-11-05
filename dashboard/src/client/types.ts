@@ -154,7 +154,7 @@ export interface HelloMsg {
   world: string;
   repo_root: string;
   ros_domain_id: string;
-  source: 'live' | 'mock';
+  source: 'live' | 'mock' | 'replay';
 }
 
 // -- reference ---------------------------------------------------------------

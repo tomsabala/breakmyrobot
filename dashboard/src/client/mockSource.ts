@@ -1,6 +1,7 @@
 import referenceFixture from '../fixtures/reference.json';
 import runsFixture from '../fixtures/runs.json';
 import runDetailsFixture from '../fixtures/runDetails.json';
+import { RESET_TOPIC } from './source';
 import type { RalSource, ReplayControls } from './source';
 import type {
   FaultResponse, Reference, RobotProfile, RunDetail, RunEntry,
@@ -699,12 +700,27 @@ export function createMockSource(): RalSource {
   let frame = 0;
 
   const reset = () => {
+    // Throw the console's state away with the stack that produced it:
+    // restarting a scenario while the previous run's trail, missions and
+    // fault events are still on screen would attribute them to this one.
+    emit(RESET_TOPIC, null);
     stack = new MockStack(robot, scenario, emit);
     accumulator = 0;
     emit('hello', {
       world: reference.world, repo_root: 'mock', ros_domain_id: 'mock', source: 'mock',
     });
     emit('link', { up: true });
+  };
+
+  /** Step the scripted stack to a sim time. Backwards means rebuild from
+   *  zero and re-run: a scripted stack has no reverse either. */
+  const seekTo = (target: number) => {
+    if (target < stack.t) reset();
+    let guard = 0;
+    while (stack.t < target && guard < 200000 && !stack.closed) {
+      stack.step(SIM_STEP);
+      guard += 1;
+    }
   };
 
   const loop = () => {
@@ -735,24 +751,24 @@ export function createMockSource(): RalSource {
     scenario: () => scenario,
     pick: (value) => { scenario = value; reset(); },
     restart: () => reset(),
-    seekAccept: () => {
-      reset();
-      let guard = 0;
-      while (stack.t < 7.5 && guard < 20000 && !stack.closed) {
-        stack.step(SIM_STEP);
-        guard += 1;
-      }
-    },
+    // The scripted mock accepts its goal at a fixed 7.5 s of its own sim
+    // clock; it is a script, not a measurement, and it always happens.
+    acceptTime: () => 7.5,
+    seekAccept: () => { seekTo(7.5); },
     playing: () => playing,
     togglePlay: () => { playing = !playing; },
-    step: (seconds) => {
-      let n = Math.round(seconds / SIM_STEP);
-      while (n > 0) { stack.step(SIM_STEP); n -= 1; }
-    },
+    step: (seconds) => { seekTo(stack.t + seconds); },
+    seek: (t) => { seekTo(t); },
+    now: () => stack.t,
+    // The mock generates indefinitely and has no last frame, so there is no
+    // window to scrub inside. Reporting one would invent an end.
+    span: () => ({ start: 0, end: 0 }),
+    speeds: () => [1, 4, 16],
     speed: () => speed,
     setSpeed: (value) => { speed = value; },
     closed: () => stack.closed,
-    setRobot: (value) => { robot = value; scenario = 'baseline'; reset(); },
+    robot: () => robot,
+    info: () => null,
   };
 
   return {
