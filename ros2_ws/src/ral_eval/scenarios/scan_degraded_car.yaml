@@ -1,0 +1,75 @@
+# Copyright 2026 Resilient Autonomy Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# `baseline_car`'s mission with the lidar degraded halfway through it.
+#
+# WHY THIS SCENARIO EXISTS AT ALL. `scan_degradation` used to be REFUSED for
+# this platform, because ArduRover navigates on EKF3 and nothing in its
+# control loop reads the lidar. That stopped being the whole truth when the
+# car gained a global planner: `config/nav2_car.yaml`'s global_costmap runs an
+# obstacle_layer with `observation_sources: scan`, `topic: /scan` - the fault
+# relay's OUTPUT - so a degraded lidar degrades what the planner sees. This
+# run measures what that degradation actually does to the one Nav2 component
+# this platform runs, instead of asserting either that it does nothing or that
+# it does something.
+#
+# WHAT IS AND IS NOT EXPECTED. The autopilot still has no reactive avoidance
+# and still steers straight at its setpoint between replans, so the mission
+# outcome is NOT the measurement here. The measurement is
+# `scan_degradation_divergence` (the stream really differs, and only after
+# activation) read together with the route: how many plans `planner_server`
+# published, whether their waypoints moved, and whether a replan was refused
+# with `mavros:no_path`. Reaching the goal anyway, stalling in the doorway as
+# this platform usually does, and an outright planning refusal are all valid
+# results and none of them is retried.
+#
+# The parameters are `scan_degraded_roomba`'s, unchanged, so the two platforms
+# are given the identical insult: sigma 0.08 m additive noise, truncation at
+# 2.5 m, a 90-150 deg blind sector and one beam in five dropped. On the Roomba
+# the 2.5 m truncation is the term that starves AMCL; this platform has no
+# AMCL, so here the same term is what removes the walls the obstacle_layer
+# would otherwise raytrace clear.
+#
+# THE ROUTE IS THE TURNING ONE, (1.0, 1.0) -> (6.5, 4.0), not `baseline_car`'s
+# straight corridor, and the activation is at 2 s rather than 15. MEASURED
+# first with the straight corridor at 15 s sim
+# (runs/scan_degraded_car_20261105T094654Z): the mission ended
+# `mavros:reached_wp_radius` after 7.15 s with 2 plan publications, and the
+# intervention was never dispatched - `run.json` recorded
+# `not_dispatched:mission_ended_first`. A fault that cannot be reached inside
+# the mission measures nothing. The turning route is the one where this
+# platform actually replans (every 5 s sim) and where the planner's costmap
+# therefore has something to say.
+#
+# `seed` seeds the relay's RNG, so the corrupted stream repeats across runs of
+# this file. EKF3 is not seedable and SITL is not deterministic, so the
+# mission outcome is not.
+
+experiment_id: scan_degraded_car
+robot: car
+world: ral_apartment
+seed: 1
+initial_pose: {x: 1.0, y: 1.0, yaw: 0.0}
+goal: {x: 6.5, y: 4.0, yaw: 0.0}
+timeout_sec: 180
+interventions:
+  - at_sec: 2.0
+    type: scan_degradation
+    params:
+      enabled: true
+      range_noise_stddev_m: 0.08
+      max_range_m: 2.5
+      blind_sector_start_deg: 90.0
+      blind_sector_end_deg: 150.0
+      dropout_probability: 0.2

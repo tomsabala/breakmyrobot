@@ -754,7 +754,16 @@ class FaultManager(Node):
             # old instance is genuinely gone and must not stay in the snapshot.
             self._event(active['fault_id'], kind, target, FaultEvent.STATE_CLEARED,
                         f'superseded by {fault_id}')
+        # Same split as the wrench below: the relay's message says what was
+        # done to the STREAM, which is platform-independent, while which of
+        # this robot's subsystems actually read that stream is a property of
+        # the platform and comes from its profile. The car consumes /scan in
+        # its planner's global costmap and nowhere else, and an operator must
+        # be told that before reading a lack of reaction as a lack of effect.
         detail = relay_response.message
+        plant_note = str(self.profile.get('scan_note', '')).strip()
+        if plant_note:
+            detail = f'{detail} On {self.robot}: {plant_note}'
         event = self._event(fault_id, kind, target, FaultEvent.STATE_ACTIVATED, detail)
         params = {'enabled': True,
                   'range_noise_stddev_m': request.range_noise_stddev_m,

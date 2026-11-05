@@ -118,14 +118,48 @@ The compressed bring-up exposed a second race — the runner seeded `/initialpos
 before AMCL had subscribed, so AMCL never got a pose and published nothing (3 of
 5 starts). That is now gated on the subscriber existing rather than on a sleep.
 
-## 5. Faults are refused where they would have no effect
+## 5. A refusal that went stale, and the measurement that replaced it
 
-Of the six interventions, the car supports five. `scan_degradation` is
-**refused** for it with a stated reason (`car.yaml`'s `unsupported`), because
-nothing in ArduRover's stack consumes the lidar; offering it would be a control
-that changes a dashboard and nothing else.
+`scan_degradation` used to be **refused** for the car, with the reason
+"ArduRover's navigation does not consume the lidar; degrading it has no effect
+on this platform". That was true when it was written and stopped being true
+when the car gained a global planner: `config/nav2_car.yaml`'s global costmap
+runs an `obstacle_layer` with `observation_sources: scan`, `topic: /scan` —
+the fault relay's **output**, chosen there deliberately so that a degraded
+lidar degrades what the planner sees. The platform was refusing a fault that
+by then had a real consumer.
 
-The sixth, `reposition`, moves the body in the simulator deliberately and
+The fault is now offered for the car, and what it does was measured rather
+than assumed.
+
+**First attempt measured nothing, and said so.** `scan_degraded_car` with
+`baseline_car`'s straight corridor and the Roomba's 15 s activation ended
+`mavros:reached_wp_radius` after 7.15 s sim; `run.json` recorded the
+intervention as `not_dispatched:mission_ended_first`
+(`runs/scan_degraded_car_20261105T094654Z`). The scenario moved to the turning
+route, where this platform actually replans, and the activation to 2 s.
+
+**MEASURED** (`runs/scan_degraded_car_20261105T094852Z`): the degradation
+activated at 57.52 s sim, and `/scan` diverged from `/scan_raw` on 370 paired
+sweeps with **0 divergent before activation** — the stream really changed, and
+only after the fault. The mission ended `mavros:stalled_no_progress` 3.03 m
+from the goal with 1 collision after 3 plan publications, which is how the
+**unfaulted** turning route ends as well (`runs/ui_car_20261026T224207Z`:
+stalled, 2.49 m, 2 collisions, 3 plans). So: the fault reaches the planner's
+input, and **no route change has been isolated** from this platform's dominant
+failure, which is tracking accuracy in tight geometry. That sentence is
+published to the operator verbatim — `car.yaml`'s new `scan_note` is appended
+by `fault_manager` to the `activated` detail, the same mechanism `mobility_note`
+already used, so a reader cannot mistake "the car did not react" for "the fault
+did nothing".
+
+The lesson is the failure mode, not the fault: a refusal is a claim about the
+system, and it rots exactly like a comment does when the system grows a new
+consumer.
+
+## 6. The intervention that reports what it could not do
+
+`reposition` moves the body in the simulator deliberately and
 reports whether the robot's estimator could be reseeded to match:
 
 - Roomba — publishes `/initialpose`, AMCL follows.
@@ -133,7 +167,7 @@ reports whether the robot's estimator could be reseeded to match:
   interface over MAVROS. Truth and estimate disagree by the move distance until
   the autopilot's own measurements pull them back.
 
-## 6. Three structural properties of the dashboard
+## 7. Three structural properties of the dashboard
 
 Not style choices — they are what make a browser mission evidence rather than a
 demo.

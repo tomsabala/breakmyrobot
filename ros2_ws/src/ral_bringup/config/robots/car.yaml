@@ -321,12 +321,38 @@ recorder_gate_topics:
   - /frame_alignment
   - /mavros/local_position/odom
 
-faults: [spawn_obstacle, clear_obstacle, mobility_fault, kidnap, reposition]
-
-unsupported:
-  scan_degradation: "ArduRover's navigation does not consume the lidar; degrading it has no effect on this platform."
+# scan_degradation WAS refused for this platform, with the reason "ArduRover's
+# navigation does not consume the lidar". That reason went stale when the car
+# gained a global planner: `nav2_car.yaml`'s global_costmap runs an
+# obstacle_layer with `observation_sources: scan`, `topic: /scan` - the fault
+# relay's OUTPUT, chosen there deliberately so a degraded lidar degrades what
+# the planner sees. The narrow statement that is still true is that the lidar
+# does not reach ArduRover's CONTROL loop: the autopilot steers at its
+# setpoint on EKF3 alone and has no reactive avoidance. It does reach the one
+# Nav2 component this platform runs.
+faults: [spawn_obstacle, clear_obstacle, scan_degradation, mobility_fault, kidnap,
+         reposition]
 
 estimator_label: EKF3
+
+# Published verbatim by the fault manager in this kind's `activated` detail,
+# beside the relay's own message about what was done to the stream. Every
+# number here is one a run produced.
+scan_note: >-
+  the only consumer of /scan on this platform is the GLOBAL COSTMAP of nav2's
+  planner_server (config/nav2_car.yaml obstacle_layer, observation_sources:
+  scan). ArduRover's control loop runs on EKF3 alone and has no reactive
+  avoidance, so a degraded lidar can change the ROUTE this vehicle is given
+  and cannot change how it tracks one. MEASURED
+  (runs/scan_degraded_car_20261105T094852Z, the turning route with the
+  degradation active from 57.5 s sim): /scan diverged from /scan_raw on 370
+  paired sweeps with 0 divergent before activation, and the mission ended
+  mavros:stalled_no_progress 3.03 m from the goal with 1 collision after 3
+  plan publications - which is how the UNFAULTED turning route ends too
+  (runs/ui_car_20261026T224207Z: stalled, 2.49 m, 2 collisions, 3 plans). The
+  fault reaches the planner's input; no route change has been ISOLATED from
+  this platform's dominant failure, which is tracking accuracy in tight
+  geometry.
 
 # MEASURED on this plant after the rear-wheel actuator was resized, against
 # mobility_fault_car run with the wrench enabled and ZERO - the same mission,

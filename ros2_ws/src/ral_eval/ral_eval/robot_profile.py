@@ -70,12 +70,18 @@ REQUIRED_KEYS = ('robot', 'model', 'description_model', 'stack_launch', 'bridge_
 #   mobility_note                a plant whose mobility response has not been
 #                                measured must say so in its own words rather
 #                                than inherit another plant's numbers
+#   scan_note                    which of THIS platform's subsystems read
+#                                /scan, published verbatim when a lidar fault
+#                                activates: a stream degraded for a robot that
+#                                consumes it in one component only must say so
+#                                rather than let a lack of reaction read as a
+#                                lack of effect
 #   arrival_estimate_tolerance_m required for mission_driver mavros_guided
 #                                (see below), meaningless for a stack whose
 #                                own goal checker owns arrival
 #   autopilot_parm               the autopilot parameter file this platform is
 #                                started with, hashed into env.json
-OPTIONAL_KEYS = ('unsupported', 'recorder_gate_topics', 'mobility_note',
+OPTIONAL_KEYS = ('unsupported', 'recorder_gate_topics', 'mobility_note', 'scan_note',
                  'arrival_estimate_tolerance_m', 'autopilot_parm')
 
 REQUIRED_SPAWN_KEYS = ('x', 'y', 'z', 'yaw')

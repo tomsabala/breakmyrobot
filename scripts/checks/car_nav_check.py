@@ -1128,10 +1128,10 @@ def main() -> int:
             # -- 3. The relay is a faithful pass-through, for the WHOLE run -----
             # Compared on identical header stamps, every message: the relay must
             # republish the object unchanged, so a restamp, a reorder or a
-            # resynthesis of ranges shows up here. Degradation is REFUSED for
-            # this robot (car.yaml's `unsupported`), so nothing in this run may
-            # ever alter the stream - which is why this is a whole-run
-            # comparison rather than the Roomba's single sampled stamp.
+            # resynthesis of ranges shows up here. This harness injects no
+            # fault, so nothing in this run may ever alter the stream - which
+            # is why this is a whole-run comparison rather than the Roomba's
+            # single sampled stamp.
             record(3, 'relay output equals relay input',
                    node.scan_pairs > 0 and node.scan_mismatches == 0,
                    f'{node.scan_pairs} /scan and /scan_raw message(s) shared a header '
@@ -1293,13 +1293,19 @@ def main() -> int:
         '  Check 8 is scored against that gate plus the footprint radius plus',
         '  THIS run\'s measured maximum |estimate − truth|, so its limit is a sum',
         '  of measurements rather than a constant.',
-        '- **The lidar is carried for evidence and consumed by nothing.**',
-        '  ArduRover navigates on EKF3 position alone; no costmap and no',
-        '  obstacle avoidance runs for this robot. `/scan` is bridged, relayed',
-        '  and recorded so the sensor gate and the evidence cover both robots',
-        '  identically — and that is exactly why `scan_degradation` is REFUSED',
-        '  for this platform (`car.yaml`\'s `unsupported`) instead of being',
-        '  offered as a fault with no effect.',
+        '- **The autopilot does not read the lidar; the planner does.**',
+        '  ArduRover steers on EKF3 position alone and has no reactive',
+        '  avoidance, so nothing in the CONTROL loop measured above consumes',
+        '  `/scan`. One ROS-side consumer does: the global costmap of the',
+        '  `planner_server` this platform runs (`config/nav2_car.yaml`,',
+        '  `obstacle_layer`, `observation_sources: scan`). `scan_degradation`',
+        '  is therefore OFFERED for this robot, with `car.yaml`\'s `scan_note`',
+        '  published verbatim when it activates: it can change the ROUTE and',
+        '  cannot change how the route is tracked. MEASURED in',
+        '  `scan_degraded_car`: the stream diverges from `/scan_raw` only',
+        '  after activation, and no route change has yet been isolated from',
+        '  this platform\'s dominant failure, tracking accuracy in tight',
+        '  geometry.',
         '- **The no-progress stop is a deterministic policy, not autonomy.** It',
         '  lives in `ral_eval/mavros_driver.py` and belongs to the scenario',
         '  runner: ArduRover carries no obstacle avoidance and will push against',

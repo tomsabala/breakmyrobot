@@ -45,9 +45,10 @@
 # is reported against that gate plus the footprint rather than against a
 # tolerance this vehicle cannot resolve.
 #
-# `seed` seeds ral_faults' RNG. Nothing in this stack consumes the lidar, so on
-# this platform it governs a stream that is recorded as evidence and read by
-# nothing. EKF3 is not seedable.
+# `seed` seeds ral_faults' RNG, which on this platform governs the lidar
+# degradation relay. This scenario injects nothing, so it changes nothing
+# here; `scan_degraded_car.yaml` is the run where it matters. EKF3 is not
+# seedable.
 
 experiment_id: baseline_car
 robot: car

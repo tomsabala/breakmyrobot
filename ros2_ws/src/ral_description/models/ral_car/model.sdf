@@ -140,13 +140,16 @@
     <!-- RPLIDAR A1, visual only: the scanner body sits on the hull inside the
          car's own footprint, so a collision here would add nothing but contact
          noise.
-         NOTHING ON THIS PLATFORM CONSUMES THE LIDAR. ArduRover does not read it
-         - it plans and navigates on EKF3 position alone, and no Nav2 costmap
-         runs for this robot. The scanner is carried so the Phase 0 sensor gate,
-         the scan-liveness check and the recorded evidence apply to both robots
-         identically. That is also exactly why `scan_degradation` is REFUSED for
-         this robot in ral_bringup/config/robots/car.yaml: degrading a stream
-         that steers nothing would be a fault with no effect presented as one.
+         THE AUTOPILOT DOES NOT CONSUME THE LIDAR. ArduRover steers on EKF3
+         position alone and has no reactive avoidance. One ROS-side consumer
+         does read it: the global costmap of the nav2 planner_server this
+         platform runs (ral_bringup/config/nav2_car.yaml, obstacle_layer on
+         /scan), which is why `scan_degradation` is OFFERED for this robot and
+         carries a `scan_note` in ral_bringup/config/robots/car.yaml saying
+         that it can change the route and cannot change how the route is
+         tracked. The scanner is also carried so the Phase 0 sensor gate, the
+         scan-liveness check and the recorded evidence apply to both robots
+         identically.
          The sensor block itself is byte-for-byte the ral_roomba block, because
          it is the same modelled RPLIDAR A1 (0.15-12 m, 360 samples, ~10 Hz,
          sigma = 0.015 m) and two robots must not carry two different scanners

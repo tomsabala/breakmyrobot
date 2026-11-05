@@ -55,13 +55,26 @@ def test_a_supported_fault_is_not_refused():
     assert supports(ROOMBA, 'kidnap') is None
     assert supports(ROOMBA, 'scan_degradation') is None
     assert supports(CAR, 'kidnap') is None
+    # The car's lidar IS consumed - by the global costmap of the planner it
+    # runs (nav2_car.yaml obstacle_layer) - so this kind is offered here too,
+    # with the narrower claim carried in car.yaml's `scan_note`. It used to be
+    # the one populated `unsupported:` block in the repository; see
+    # docs/engineering-log.md section 5.
+    assert supports(CAR, 'scan_degradation') is None
 
 
 def test_an_unsupported_fault_refuses_with_the_profiles_own_reason_verbatim():
-    """That string is what the FaultEvent and the service reply carry."""
-    stated = CAR['unsupported']['scan_degradation']
-    assert supports(CAR, 'scan_degradation') == stated
-    assert 'ArduRover' in stated
+    """
+    That string is what the FaultEvent and the service reply carry.
+
+    The profile is SYNTHETIC on purpose: this asserts the mechanism, not
+    which platform happens to refuse something today. Pinning it to a real
+    profile is what broke this test when the car's planner gave its lidar a
+    consumer and the refusal was retired.
+    """
+    stated = 'this plant has no mast to collapse; the fault would move nothing'
+    forged = dict(CAR, unsupported={'mast_collapse': stated})
+    assert supports(forged, 'mast_collapse') == stated
 
 
 def test_a_kind_absent_with_no_stated_reason_still_refuses():
