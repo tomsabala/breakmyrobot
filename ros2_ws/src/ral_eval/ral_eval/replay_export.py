@@ -121,14 +121,8 @@ TOPIC_ALIGNMENT = '/frame_alignment'
 TOPIC_COSTMAP = '/global_costmap/costmap'
 
 # Minimum sim interval between kept samples, per SSE topic. A topic absent
-# from this table is an EVENT and is kept in full; see the module docstring.
-#
-# /bumper is the one that looks like a sample and is not. A gz contact sensor
-# publishes every physics step while two bodies touch - 14,170 messages for
-# the two contacts of ui_car_20261026T224207Z - but the console DERIVES its
-# collision count from the stream it receives, debouncing at 0.5 s sim per
-# colliding pair (store.ts ingestBumper). Thinning it would change a number
-# the operator reads, so it is kept whole and the file is larger for it.
+# from BOTH this table and the special cases below is an EVENT and is kept in
+# full; see the module docstring.
 MIN_INTERVAL_S = {
     'truth': 0.1,
     'est': 0.1,
@@ -137,6 +131,31 @@ MIN_INTERVAL_S = {
     'scan_raw': 0.5,
     'clock': 1.0,
 }
+
+# Two streams are neither samples nor events, and a fixed bucket would either
+# bloat the file or change a number the console displays. Each gets a rule
+# derived from what the CONSOLE does with it.
+#
+# /bumper: a gz contact sensor publishes every physics step while two bodies
+# touch - 14,170 messages for the two contacts of ui_car_20261026T224207Z,
+# 2.64 MB of a 3.35 MB fixture. The console does not show that stream; it
+# derives a collision count by debouncing at 0.5 s sim per colliding pair
+# (store.ts `ingestBumper`: a hit is recorded when the gap to the previous
+# KEPT hit of that pair exceeds the window). Replaying only the messages that
+# WOULD become hits reproduces that list exactly - every kept frame is more
+# than a window after the previous one by construction - so the displayed
+# count is unchanged and the rest is 2.6 MB of bytes nobody reads. The last
+# message is kept too, because the console also shows the latest /bumper.
+BUMPER_DEBOUNCE_S = 0.5
+
+# /navigate_to_pose feedback: 5,244 messages, 0.62 MB of a 2.05 MB fixture.
+# The console keeps only the LATEST (store.ts `case 'fb'`), reading
+# `distance_remaining` and `number_of_recoveries` off it, so a 5 Hz grid
+# shows the same numbers moving at the same speed. Every message at which
+# `number_of_recoveries` CHANGES is kept regardless of the grid: a recovery
+# is an event in Nav2's own count, and dropping the instant it incremented
+# would move it in the timeline.
+FB_INTERVAL_S = 0.2
 
 # Rounding, in decimal places. Positions and ranges to the millimetre: the
 # map is 0.05 m per cell and the lidar resolves nothing finer than its own
@@ -354,8 +373,64 @@ def decimate(frames_in: list, interval_s) -> list:
     return kept
 
 
+def thin_bumper(frames_in: list) -> list:
+    """
+    Keep only the contacts the console would COUNT, plus the last message.
+
+    This is `store.ts ingestBumper` run at export time: per colliding pair, a
+    frame survives when the gap to the previous SURVIVING frame of that pair
+    exceeds BUMPER_DEBOUNCE_S. Because the console applies the same rule to
+    what it receives, and every frame kept here is already more than a window
+    after its predecessor, replaying the thinned stream produces the identical
+    hit list - the collision count a reader sees is the same number.
+
+    The final message is kept whichever side of the window it falls, because
+    the console also displays the latest /bumper as a live field.
+    """
+    kept = []
+    last_hit = {}
+    for frame in frames_in:
+        pairs = frame['payload'].get('pairs') or []
+        stamp = frame['t']
+        if any(pair not in last_hit or stamp - last_hit[pair] > BUMPER_DEBOUNCE_S
+               for pair in pairs):
+            for pair in pairs:
+                if pair not in last_hit or stamp - last_hit[pair] > BUMPER_DEBOUNCE_S:
+                    last_hit[pair] = stamp
+            kept.append(frame)
+    if frames_in and kept and kept[-1] is not frames_in[-1]:
+        kept.append(frames_in[-1])
+    return kept
+
+
+def thin_feedback(frames_in: list) -> list:
+    """
+    Keep a 5 Hz grid, plus every message at which the recovery count changed.
+
+    The console keeps the latest feedback only, so the grid is about how
+    smoothly `distance_remaining` moves. `number_of_recoveries` is Nav2's own
+    count of behaviour-tree recoveries and is the one field whose INSTANT
+    matters, so a message that changes it is never dropped.
+    """
+    grid = {f['t']: f for f in decimate(frames_in, FB_INTERVAL_S)}
+    previous = None
+    for frame in frames_in:
+        recoveries = frame['payload'].get('number_of_recoveries')
+        if recoveries != previous:
+            grid[frame['t']] = frame
+            previous = recoveries
+    return [grid[t] for t in sorted(grid)]
+
+
 def decimation_rule(topic: str, read_count: int, kept_count: int) -> str:
     """Describe the rule actually applied to one topic, as the fixture records it."""
+    if topic == 'bumper':
+        return (f'kept only the contacts the console debounce would count, at '
+                f'{BUMPER_DEBOUNCE_S:g} s sim per colliding pair, plus the last '
+                f'message: {kept_count} of {read_count}')
+    if topic == 'fb':
+        return (f'kept a {FB_INTERVAL_S:g} s sim grid plus every change of '
+                f'number_of_recoveries: {kept_count} of {read_count}')
     interval = MIN_INTERVAL_S.get(topic)
     if interval is None:
         return f'kept every message: {kept_count} of {read_count}'
@@ -488,7 +563,12 @@ def export_run(run_dir: str, map_yaml: str) -> dict:
             out.append({'t': stamp, 'topic': sse_topic, 'payload': payload})
         out.sort(key=lambda frame: frame['t'])
         read_counts[sse_topic] = len(out)
-        by_topic[sse_topic] = decimate(out, MIN_INTERVAL_S.get(sse_topic))
+        if sse_topic == 'bumper':
+            by_topic[sse_topic] = thin_bumper(out)
+        elif sse_topic == 'fb':
+            by_topic[sse_topic] = thin_feedback(out)
+        else:
+            by_topic[sse_topic] = decimate(out, MIN_INTERVAL_S.get(sse_topic))
 
     all_frames = [frame for topic_frames in by_topic.values() for frame in topic_frames]
     if not all_frames:

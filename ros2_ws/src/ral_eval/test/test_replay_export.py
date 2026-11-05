@@ -29,6 +29,7 @@ import json
 import os
 
 from ral_eval.replay_export import (
+    BUMPER_DEBOUNCE_S,
     ExportError,
     REPLAY_VERSION,
     build_headline,
@@ -37,6 +38,8 @@ from ral_eval.replay_export import (
     export_run,
     round_payload,
     stream_sources,
+    thin_bumper,
+    thin_feedback,
     write_index,
 )
 
@@ -268,3 +271,89 @@ def test_index_lists_every_fixture_present_with_its_size(tmp_path):
     assert entry['bytes'] == os.path.getsize(str(tmp_path / 'a_run.json'))
     assert entry['t_start'] == 1.5 and entry['t_end'] == 9.25
     assert entry['headline'] == doc['headline']
+
+
+def _console_hits(frames):
+    """
+    `store.ts ingestBumper`, re-implemented here rather than imported.
+
+    A hit is recorded when the gap to the previous KEPT hit of that colliding
+    pair exceeds the window. Re-implementing it is the point: this asserts
+    that the exporter's thinning agrees with what the console independently
+    does, so a change to either side fails here instead of silently moving a
+    number a reader sees.
+    """
+    hits = []
+    for frame in frames:
+        for pair in frame['payload']['pairs']:
+            previous = [h for h in hits if h[1] == pair]
+            if not previous or frame['t'] - previous[-1][0] > BUMPER_DEBOUNCE_S:
+                hits.append((frame['t'], pair))
+    return hits
+
+
+def _contact(t, pairs):
+    return {'t': t, 'topic': 'bumper',
+            'payload': {'stamp_sim_s': t, 'count': len(pairs), 'pairs': list(pairs)}}
+
+
+def test_thinning_bumper_preserves_the_hit_list_the_console_would_count():
+    """The whole justification for dropping 99.6% of that stream."""
+    # 20 s of continuous contact at 100 Hz against one wall, then a second
+    # pair joining late - the shape ui_car_20261026T224207Z actually has.
+    raw = []
+    for step in range(2000):
+        t = round(60.0 + step * 0.01, 3)
+        pairs = ['car|wall_a'] + (['car|wall_b'] if t >= 70.0 else [])
+        raw.append(_contact(t, pairs))
+
+    thinned = thin_bumper(raw)
+
+    assert len(thinned) < len(raw) / 10
+    assert _console_hits(thinned) == _console_hits(raw)
+
+
+def test_thinning_bumper_keeps_the_last_message_the_console_displays():
+    """The console shows the latest /bumper as a field, not only a count."""
+    raw = [_contact(round(1.0 + i * 0.01, 3), ['car|wall_a']) for i in range(200)]
+
+    thinned = thin_bumper(raw)
+
+    assert thinned[-1] is raw[-1]
+
+
+def test_thinning_bumper_keeps_a_short_isolated_contact():
+    """One tap is one hit, and a thinner that lost it would lose the event."""
+    raw = [_contact(5.0, ['car|box']), _contact(5.01, ['car|box'])]
+
+    thinned = thin_bumper(raw)
+
+    assert _console_hits(thinned) == _console_hits(raw) == [(5.0, 'car|box')]
+
+
+def _feedback(t, remaining, recoveries):
+    return {'t': t, 'topic': 'fb',
+            'payload': {'stamp_sim_s': t, 'distance_remaining': remaining,
+                        'number_of_recoveries': recoveries}}
+
+
+def test_thinning_feedback_keeps_every_recovery_increment():
+    """A recovery is an event in Nav2's own count; its instant must survive."""
+    raw = []
+    recoveries = 0
+    for step in range(500):
+        t = round(10.0 + step * 0.02, 3)
+        if step in (137, 138, 301):
+            recoveries += 1
+        raw.append(_feedback(t, 9.0 - step * 0.01, recoveries))
+
+    thinned = thin_feedback(raw)
+
+    assert len(thinned) < len(raw) / 2
+    changes = [f['t'] for i, f in enumerate(raw)
+               if i and f['payload']['number_of_recoveries']
+               != raw[i - 1]['payload']['number_of_recoveries']]
+    kept = {f['t'] for f in thinned}
+    assert set(changes) <= kept
+    assert thinned[-1]['payload']['number_of_recoveries'] == 3
+    assert [f['t'] for f in thinned] == sorted(f['t'] for f in thinned)
